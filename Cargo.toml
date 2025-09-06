@@ -1,0 +1,10 @@
+[package]
+name = "hello_vulkan_rt"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+bytemuck = "1.10"
+glam = {version = "0.30.5", features = ["bytemuck"]}
+lazy_vulkan.path = "../lazy_vulkan"
+winit = "0.30.12"

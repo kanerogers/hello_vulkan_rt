@@ -1,0 +1,26 @@
+#version 460 core
+#extension GL_EXT_ray_tracing : require
+
+layout(set = 0, binding = 0) uniform accelerationStructureEXT tlas;
+layout(set = 0, binding = 1, rgba8) uniform writeonly image2D outImage;
+
+layout(location = 0) rayPayloadEXT vec3 payload;
+
+void main() {
+    ivec2 px = ivec2(gl_LaunchIDEXT.xy);
+    ivec2 sz = ivec2(gl_LaunchSizeEXT.xy);
+    vec2 uv = (vec2(px) + 0.5) / vec2(sz);
+
+    // Primary ray in NDC-ish space (super simple pinhole)
+    vec3 ro = vec3(0, 0, 1.5);
+    vec3 rd = normalize(vec3(uv * 2.0 - 1.0, -1.0));
+
+    payload = vec3(0.0);
+    traceRayEXT(tlas, /* accel */
+        gl_RayFlagsOpaqueEXT,
+        0xFF, /* cull mask */
+        0, 0, 0, /* SBT record offsets */
+        ro, 0.0, rd, 10000.0, 0);
+
+    imageStore(outImage, px, vec4(payload, 1.0));
+}

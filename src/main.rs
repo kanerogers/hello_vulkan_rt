@@ -1,0 +1,778 @@
+mod align;
+
+use std::sync::Arc;
+
+use lazy_vulkan::{
+    BufferAllocation, FULL_IMAGE, LazyVulkan, StateFamily, SubRenderer,
+    ash::vk::{self, Packed24_8},
+};
+use winit::{application::ApplicationHandler, window::WindowAttributes};
+
+use crate::align::{align_up_np2, align_up_pow2};
+
+static CLOSEST_SHADER_PATH: &'static str = "shaders/closesthit.rchit.spv";
+static MISS_SHADER_PATH: &'static str = "shaders/miss.rmiss.spv";
+static RAYGEN_SHADER_PATH: &'static str = "shaders/raygen.rgen.spv";
+
+#[repr(C)]
+#[derive(Copy, Clone)]
+struct Registers {
+    colour: glam::Vec4,
+}
+
+unsafe impl bytemuck::Zeroable for Registers {}
+unsafe impl bytemuck::Pod for Registers {}
+
+pub struct RTRenderer {
+    colour: glam::Vec4,
+    context: Arc<lazy_vulkan::Context>,
+    vertex_buffer: BufferAllocation<glam::Vec3>,
+    instance_buffer: BufferAllocation<vk::AccelerationStructureInstanceKHR>,
+    blas: vk::AccelerationStructureKHR,
+    tlas: vk::AccelerationStructureKHR,
+    pipeline: vk::Pipeline,
+    pipeline_layout: vk::PipelineLayout,
+    descriptor_set: vk::DescriptorSet,
+    gen_region: vk::StridedDeviceAddressRegionKHR,
+    miss_region: vk::StridedDeviceAddressRegionKHR,
+    hit_region: vk::StridedDeviceAddressRegionKHR,
+    call_region: vk::StridedDeviceAddressRegionKHR,
+    image: lazy_vulkan::Image,
+}
+
+impl RTRenderer {
+    pub fn new(renderer: &mut lazy_vulkan::Renderer<RenderStateFamily>) -> Self {
+        let context = renderer.context.clone();
+        let allocator = &mut renderer.allocator;
+        let command_buffer = unsafe {
+            context.device.allocate_command_buffers(
+                &vk::CommandBufferAllocateInfo::default()
+                    .command_buffer_count(1)
+                    .command_pool(context.command_pool),
+            )
+        }
+        .unwrap()[0];
+
+        unsafe {
+            context.device.begin_command_buffer(
+                command_buffer,
+                &vk::CommandBufferBeginInfo::default()
+                    .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT),
+            )
+        }
+        .unwrap();
+
+        let mut vertex_buffer = allocator.allocate_buffer(
+            1024,
+            vk::BufferUsageFlags::ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_KHR,
+        );
+
+        let vertices = [
+            [0.0, -0.5, 0.0].into(),
+            [-0.5, 0.5, 0.0].into(),
+            [0.5, 0.5, 0.0].into(),
+        ];
+
+        vertex_buffer.append(&vertices, allocator);
+
+        let geometries = &[vk::AccelerationStructureGeometryKHR::default()
+            .geometry(vk::AccelerationStructureGeometryDataKHR {
+                triangles: vk::AccelerationStructureGeometryTrianglesDataKHR::default()
+                    .vertex_format(vk::Format::R32G32B32_SFLOAT)
+                    .vertex_data(vk::DeviceOrHostAddressConstKHR {
+                        device_address: vertex_buffer.device_address,
+                    })
+                    .vertex_stride(std::mem::size_of::<glam::Vec3>() as _)
+                    .max_vertex((vertex_buffer.len() - 1) as _)
+                    .index_type(vk::IndexType::NONE_KHR),
+            })
+            .geometry_type(vk::GeometryTypeKHR::TRIANGLES)
+            .flags(vk::GeometryFlagsKHR::OPAQUE)];
+
+        let build_geometry_info = vk::AccelerationStructureBuildGeometryInfoKHR::default()
+            .ty(vk::AccelerationStructureTypeKHR::BOTTOM_LEVEL)
+            .mode(vk::BuildAccelerationStructureModeKHR::BUILD)
+            .geometries(geometries);
+
+        let mut size_info = vk::AccelerationStructureBuildSizesInfoKHR::default();
+        unsafe {
+            context
+                .acceleration_structure_pfn
+                .get_acceleration_structure_build_sizes(
+                    vk::AccelerationStructureBuildTypeKHR::DEVICE,
+                    &build_geometry_info,
+                    &[1],
+                    &mut size_info,
+                )
+        };
+
+        // This is essentially opaque storage used by the driver
+        let blas_storage = allocator.allocate_buffer::<u8>(
+            size_info.acceleration_structure_size as _,
+            vk::BufferUsageFlags::ACCELERATION_STRUCTURE_STORAGE_KHR,
+        );
+
+        let blas = unsafe {
+            context
+                .acceleration_structure_pfn
+                .create_acceleration_structure(
+                    &vk::AccelerationStructureCreateInfoKHR::default()
+                        .ty(vk::AccelerationStructureTypeKHR::BOTTOM_LEVEL)
+                        .buffer(blas_storage.handle)
+                        .size(size_info.acceleration_structure_size),
+                    None,
+                )
+        }
+        .unwrap();
+
+        let scratch_buffer = allocator.allocate_buffer_with_alignment::<u8>(
+            size_info.build_scratch_size as _,
+            context
+                .raytracing_properties
+                .min_acceleration_structure_scratch_offset_alignment as u64,
+            vk::BufferUsageFlags::STORAGE_BUFFER,
+        );
+
+        let build_geometry_info = build_geometry_info
+            .dst_acceleration_structure(blas)
+            .scratch_data(vk::DeviceOrHostAddressKHR {
+                device_address: scratch_buffer.device_address,
+            });
+
+        allocator.execute_transfers(command_buffer);
+
+        unsafe {
+            context
+                .acceleration_structure_pfn
+                .cmd_build_acceleration_structures(
+                    command_buffer,
+                    &[build_geometry_info],
+                    &[
+                        &[
+                            vk::AccelerationStructureBuildRangeInfoKHR::default()
+                                .primitive_count(1),
+                        ],
+                    ],
+                )
+        };
+
+        let blas_address = unsafe {
+            context
+                .acceleration_structure_pfn
+                .get_acceleration_structure_device_address(
+                    &vk::AccelerationStructureDeviceAddressInfoKHR::default()
+                        .acceleration_structure(blas),
+                )
+        };
+
+        // Create the instance buffer
+        let mut instance_buffer = allocator
+            .allocate_buffer::<vk::AccelerationStructureInstanceKHR>(
+                std::mem::size_of::<vk::AccelerationStructureDeviceAddressInfoKHR>(),
+                vk::BufferUsageFlags::ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_KHR,
+            );
+
+        unsafe {
+            instance_buffer.append_unsafe(
+                &[vk::AccelerationStructureInstanceKHR {
+                    transform: glam_to_khr(glam::Affine3A::IDENTITY),
+                    instance_custom_index_and_mask: Packed24_8::new(0, 0xFF),
+                    instance_shader_binding_table_record_offset_and_flags: Packed24_8::new(
+                        0,
+                        vk::GeometryInstanceFlagsKHR::TRIANGLE_FACING_CULL_DISABLE.as_raw() as _,
+                    ),
+                    acceleration_structure_reference: vk::AccelerationStructureReferenceKHR {
+                        device_handle: blas_address,
+                    },
+                }],
+                allocator,
+            )
+        };
+
+        let instance_geometries = &[vk::AccelerationStructureGeometryKHR::default()
+            .geometry(vk::AccelerationStructureGeometryDataKHR {
+                instances: vk::AccelerationStructureGeometryInstancesDataKHR::default()
+                    .array_of_pointers(false)
+                    .data(vk::DeviceOrHostAddressConstKHR {
+                        device_address: instance_buffer.device_address,
+                    }),
+            })
+            .geometry_type(vk::GeometryTypeKHR::INSTANCES)];
+
+        let build_geometry_info = vk::AccelerationStructureBuildGeometryInfoKHR::default()
+            .ty(vk::AccelerationStructureTypeKHR::TOP_LEVEL)
+            .mode(vk::BuildAccelerationStructureModeKHR::BUILD)
+            .geometries(instance_geometries);
+
+        let mut size_info = vk::AccelerationStructureBuildSizesInfoKHR::default();
+        unsafe {
+            context
+                .acceleration_structure_pfn
+                .get_acceleration_structure_build_sizes(
+                    vk::AccelerationStructureBuildTypeKHR::DEVICE,
+                    &build_geometry_info,
+                    &[1],
+                    &mut size_info,
+                )
+        };
+
+        // This is essentially opaque storage used by the driver
+        let tlas_storage = allocator.allocate_buffer::<u8>(
+            size_info.acceleration_structure_size as _,
+            vk::BufferUsageFlags::ACCELERATION_STRUCTURE_STORAGE_KHR,
+        );
+
+        let tlas = unsafe {
+            context
+                .acceleration_structure_pfn
+                .create_acceleration_structure(
+                    &vk::AccelerationStructureCreateInfoKHR::default()
+                        .ty(vk::AccelerationStructureTypeKHR::TOP_LEVEL)
+                        .buffer(tlas_storage.handle)
+                        .size(size_info.acceleration_structure_size),
+                    None,
+                )
+        }
+        .unwrap();
+
+        // This is essentially opaque storage used by the driver
+        let scratch_buffer = allocator.allocate_buffer_with_alignment::<u8>(
+            size_info.build_scratch_size as _,
+            context
+                .raytracing_properties
+                .min_acceleration_structure_scratch_offset_alignment as u64,
+            vk::BufferUsageFlags::STORAGE_BUFFER,
+        );
+
+        let build_geometry_info = build_geometry_info
+            .dst_acceleration_structure(tlas)
+            .scratch_data(vk::DeviceOrHostAddressKHR {
+                device_address: scratch_buffer.device_address,
+            });
+
+        allocator.execute_transfers(command_buffer);
+
+        unsafe {
+            context
+                .acceleration_structure_pfn
+                .cmd_build_acceleration_structures(
+                    command_buffer,
+                    &[build_geometry_info],
+                    &[
+                        &[
+                            vk::AccelerationStructureBuildRangeInfoKHR::default()
+                                .primitive_count(1),
+                        ],
+                    ],
+                )
+        };
+
+        let device = &context.device;
+
+        let pool_sizes = [
+            vk::DescriptorPoolSize {
+                ty: vk::DescriptorType::ACCELERATION_STRUCTURE_KHR,
+                descriptor_count: 10,
+            },
+            vk::DescriptorPoolSize {
+                ty: vk::DescriptorType::STORAGE_IMAGE,
+                descriptor_count: 10,
+            },
+        ];
+
+        let pool = unsafe {
+            device.create_descriptor_pool(
+                &vk::DescriptorPoolCreateInfo::default()
+                    .max_sets(1)
+                    .pool_sizes(&pool_sizes),
+                None,
+            )
+        }
+        .unwrap();
+
+        let layout = unsafe {
+            device.create_descriptor_set_layout(
+                &vk::DescriptorSetLayoutCreateInfo::default().bindings(&[
+                    vk::DescriptorSetLayoutBinding {
+                        binding: 0,
+                        descriptor_type: vk::DescriptorType::ACCELERATION_STRUCTURE_KHR,
+                        stage_flags: vk::ShaderStageFlags::RAYGEN_KHR
+                            | vk::ShaderStageFlags::CLOSEST_HIT_KHR
+                            | vk::ShaderStageFlags::MISS_KHR,
+                        descriptor_count: 1,
+                        ..Default::default()
+                    },
+                    vk::DescriptorSetLayoutBinding {
+                        binding: 1,
+                        descriptor_type: vk::DescriptorType::STORAGE_IMAGE,
+                        stage_flags: vk::ShaderStageFlags::RAYGEN_KHR,
+                        descriptor_count: 1,
+                        ..Default::default()
+                    },
+                ]),
+                None,
+            )
+        }
+        .unwrap();
+
+        let set = unsafe {
+            device
+                .allocate_descriptor_sets(
+                    &vk::DescriptorSetAllocateInfo::default()
+                        .descriptor_pool(pool)
+                        .set_layouts(std::slice::from_ref(&layout)),
+                )
+                .unwrap()[0]
+        };
+
+        let pipeline_layout = unsafe {
+            device.create_pipeline_layout(
+                &vk::PipelineLayoutCreateInfo::default()
+                    .set_layouts(&[layout])
+                    .push_constant_ranges(&[vk::PushConstantRange::default()
+                        .stage_flags(
+                            vk::ShaderStageFlags::RAYGEN_KHR
+                                | vk::ShaderStageFlags::CLOSEST_HIT_KHR
+                                | vk::ShaderStageFlags::ANY_HIT_KHR,
+                        )
+                        .size(std::mem::size_of::<Registers>() as _)]),
+                None,
+            )
+        }
+        .unwrap();
+
+        let raygen_index = 0;
+        let miss_index = 1;
+        let closest_hit_index = 2;
+
+        let pipeline = unsafe {
+            context
+                .ray_tracing_pipeline_pfn
+                .create_ray_tracing_pipelines(
+                    vk::DeferredOperationKHR::null(),
+                    vk::PipelineCache::null(),
+                    &[vk::RayTracingPipelineCreateInfoKHR::default()
+                        .groups(&[
+                            vk::RayTracingShaderGroupCreateInfoKHR::default()
+                                .ty(vk::RayTracingShaderGroupTypeKHR::GENERAL)
+                                .any_hit_shader(vk::SHADER_UNUSED_KHR)
+                                .closest_hit_shader(vk::SHADER_UNUSED_KHR)
+                                .intersection_shader(vk::SHADER_UNUSED_KHR)
+                                .general_shader(raygen_index),
+                            vk::RayTracingShaderGroupCreateInfoKHR::default()
+                                .ty(vk::RayTracingShaderGroupTypeKHR::GENERAL)
+                                .any_hit_shader(vk::SHADER_UNUSED_KHR)
+                                .closest_hit_shader(vk::SHADER_UNUSED_KHR)
+                                .intersection_shader(vk::SHADER_UNUSED_KHR)
+                                .general_shader(miss_index),
+                            vk::RayTracingShaderGroupCreateInfoKHR::default()
+                                .ty(vk::RayTracingShaderGroupTypeKHR::TRIANGLES_HIT_GROUP)
+                                .any_hit_shader(vk::SHADER_UNUSED_KHR)
+                                .closest_hit_shader(vk::SHADER_UNUSED_KHR)
+                                .intersection_shader(vk::SHADER_UNUSED_KHR)
+                                .general_shader(closest_hit_index),
+                        ])
+                        .stages(&[
+                            vk::PipelineShaderStageCreateInfo::default()
+                                .stage(vk::ShaderStageFlags::RAYGEN_KHR)
+                                .name(c"main")
+                                .module(lazy_vulkan::load_module(RAYGEN_SHADER_PATH, &context)),
+                            vk::PipelineShaderStageCreateInfo::default()
+                                .stage(vk::ShaderStageFlags::MISS_KHR)
+                                .name(c"main")
+                                .module(lazy_vulkan::load_module(MISS_SHADER_PATH, &context)),
+                            vk::PipelineShaderStageCreateInfo::default()
+                                .stage(vk::ShaderStageFlags::CLOSEST_HIT_KHR)
+                                .name(c"main")
+                                .module(lazy_vulkan::load_module(CLOSEST_SHADER_PATH, &context)),
+                        ])
+                        .layout(pipeline_layout)],
+                    None,
+                )
+        }
+        .unwrap()[0];
+
+        // SBT!
+        let miss_count = 1;
+        let hit_count = 1;
+        let handle_count = 1 + miss_count + hit_count;
+        let raytracing_properties = &context.raytracing_properties;
+        let handle_size = raytracing_properties.shader_group_handle_size;
+        let handle_size_aligned = align_up_pow2(
+            handle_size as _,
+            raytracing_properties.shader_group_handle_alignment as _,
+        );
+
+        let stride = align_up_pow2(
+            handle_size_aligned,
+            raytracing_properties.shader_group_base_alignment as _,
+        );
+        let mut gen_region = vk::StridedDeviceAddressRegionKHR::default()
+            .stride(stride)
+            .size(stride);
+
+        let mut miss_region = vk::StridedDeviceAddressRegionKHR::default()
+            .stride(handle_size_aligned)
+            .size(align_up_np2(
+                miss_count * handle_size_aligned,
+                raytracing_properties.shader_group_base_alignment as u64,
+            ));
+
+        let mut hit_region = vk::StridedDeviceAddressRegionKHR::default()
+            .stride(handle_size_aligned)
+            .size(align_up_np2(
+                hit_count * handle_size_aligned,
+                raytracing_properties.shader_group_base_alignment as u64,
+            ));
+
+        let call_region = vk::StridedDeviceAddressRegionKHR::default();
+
+        let data_size = handle_count * (handle_size as u64);
+
+        let handles = unsafe {
+            context
+                .ray_tracing_pipeline_pfn
+                .get_ray_tracing_shader_group_handles(
+                    pipeline,
+                    0,
+                    handle_count as u32,
+                    data_size as usize,
+                )
+        }
+        .unwrap();
+
+        // Copy data
+        let sbt_size = gen_region.size + miss_region.size + hit_region.size + call_region.size;
+        let mut sbt_data = vec![0; sbt_size as usize];
+
+        let mut offset = 0;
+        sbt_data[offset..handle_size as usize].copy_from_slice(&handles[..handle_size as usize]);
+        offset += gen_region.size as usize;
+        sbt_data[offset..offset + handle_size as usize]
+            .copy_from_slice(&handles[handle_size as usize..(handle_size as usize) * 2]);
+
+        offset += miss_region.size as usize;
+        sbt_data[offset..offset + handle_size as usize]
+            .copy_from_slice(&handles[(handle_size as usize * 2)..(handle_size as usize) * 3]);
+
+        let mut sbt_buffer = allocator.allocate_buffer_with_alignment::<u8>(
+            sbt_size as usize,
+            raytracing_properties.shader_group_base_alignment as u64,
+            vk::BufferUsageFlags::TRANSFER_SRC | vk::BufferUsageFlags::SHADER_BINDING_TABLE_KHR,
+        );
+        sbt_buffer.append(&sbt_data, allocator);
+
+        gen_region.device_address = sbt_buffer.device_address;
+        miss_region.device_address = gen_region.device_address + gen_region.size;
+        hit_region.device_address = gen_region.device_address + gen_region.size + miss_region.size;
+
+        allocator.execute_transfers(command_buffer);
+
+        let fence = unsafe { device.create_fence(&vk::FenceCreateInfo::default(), None) }.unwrap();
+        unsafe {
+            context.device.end_command_buffer(command_buffer).unwrap();
+            context.device.queue_submit(
+                context.graphics_queue,
+                &[vk::SubmitInfo::default().command_buffers(&[command_buffer])],
+                fence,
+            )
+        }
+        .unwrap();
+
+        unsafe { context.device.wait_for_fences(&[fence], true, u64::MAX) }.unwrap();
+
+        let extent = renderer.get_drawable_extent();
+        let image = renderer.create_image(
+            vk::Format::R8G8B8A8_UNORM,
+            extent,
+            &[],
+            vk::ImageUsageFlags::STORAGE | vk::ImageUsageFlags::TRANSFER_SRC,
+        );
+
+        unsafe {
+            device.update_descriptor_sets(
+                &[
+                    vk::WriteDescriptorSet::default()
+                        .descriptor_type(vk::DescriptorType::ACCELERATION_STRUCTURE_KHR)
+                        .dst_set(set)
+                        .dst_binding(0)
+                        .descriptor_count(1)
+                        .push_next(
+                            &mut vk::WriteDescriptorSetAccelerationStructureKHR::default()
+                                .acceleration_structures(&[tlas]),
+                        ),
+                    vk::WriteDescriptorSet::default()
+                        .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
+                        .dst_set(set)
+                        .dst_binding(1)
+                        .descriptor_count(1)
+                        .image_info(&[vk::DescriptorImageInfo::default()
+                            .image_layout(vk::ImageLayout::GENERAL)
+                            .image_view(image.view)]),
+                ],
+                &[],
+            )
+        };
+
+        Self {
+            colour: glam::Vec4::ONE,
+            context,
+            vertex_buffer,
+            instance_buffer,
+            blas,
+            tlas,
+            descriptor_set: set,
+            pipeline,
+            pipeline_layout,
+            hit_region,
+            gen_region,
+            miss_region,
+            call_region,
+            image,
+        }
+    }
+}
+
+impl<'a> SubRenderer<'a> for RTRenderer {
+    type State = RenderState;
+
+    fn draw_layer(
+        &mut self,
+        _state: &Self::State,
+        context: &lazy_vulkan::Context,
+        params: lazy_vulkan::DrawParams,
+    ) {
+        let device = &context.device;
+        let command_buffer = context.draw_command_buffer;
+        let drawable = &params.drawable;
+
+        unsafe {
+            device.cmd_bind_pipeline(
+                command_buffer,
+                vk::PipelineBindPoint::RAY_TRACING_KHR,
+                self.pipeline,
+            );
+            device.cmd_bind_descriptor_sets(
+                command_buffer,
+                vk::PipelineBindPoint::RAY_TRACING_KHR,
+                self.pipeline_layout,
+                0,
+                &[self.descriptor_set],
+                &[],
+            );
+            context.cmd_pipeline_barrier2(
+                command_buffer,
+                &vk::DependencyInfo::default().image_memory_barriers(&[
+                    vk::ImageMemoryBarrier2::default()
+                        .subresource_range(FULL_IMAGE)
+                        .image(self.image.handle)
+                        .src_access_mask(vk::AccessFlags2::NONE)
+                        .src_stage_mask(vk::PipelineStageFlags2::TOP_OF_PIPE)
+                        .dst_access_mask(vk::AccessFlags2::SHADER_WRITE)
+                        .dst_stage_mask(vk::PipelineStageFlags2::RAY_TRACING_SHADER_KHR)
+                        .old_layout(vk::ImageLayout::UNDEFINED)
+                        .new_layout(vk::ImageLayout::GENERAL),
+                ]),
+            );
+
+            context.ray_tracing_pipeline_pfn.cmd_trace_rays(
+                command_buffer,
+                &self.gen_region,
+                &self.miss_region,
+                &self.hit_region,
+                &self.call_region,
+                drawable.extent.width,
+                drawable.extent.height,
+                1,
+            );
+
+            context.cmd_pipeline_barrier2(
+                command_buffer,
+                &vk::DependencyInfo::default().image_memory_barriers(&[
+                    vk::ImageMemoryBarrier2::default()
+                        .subresource_range(FULL_IMAGE)
+                        .image(self.image.handle)
+                        .src_access_mask(vk::AccessFlags2::SHADER_WRITE)
+                        .src_stage_mask(vk::PipelineStageFlags2::RAY_TRACING_SHADER_KHR)
+                        .dst_access_mask(vk::AccessFlags2::TRANSFER_READ)
+                        .dst_stage_mask(vk::PipelineStageFlags2::TRANSFER)
+                        .new_layout(vk::ImageLayout::TRANSFER_SRC_OPTIMAL)
+                        .old_layout(vk::ImageLayout::GENERAL),
+                    vk::ImageMemoryBarrier2::default()
+                        .subresource_range(FULL_IMAGE)
+                        .image(drawable.image)
+                        .src_access_mask(vk::AccessFlags2::COLOR_ATTACHMENT_WRITE)
+                        .src_stage_mask(vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT)
+                        .dst_access_mask(vk::AccessFlags2::TRANSFER_WRITE)
+                        .dst_stage_mask(vk::PipelineStageFlags2::TRANSFER)
+                        .old_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
+                        .new_layout(vk::ImageLayout::TRANSFER_DST_OPTIMAL),
+                ]),
+            );
+
+            context.device.cmd_blit_image(
+                command_buffer,
+                self.image.handle,
+                vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
+                drawable.image,
+                vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+                &[vk::ImageBlit::default()
+                    .src_offsets([
+                        vk::Offset3D::default(),
+                        vk::Offset3D::default()
+                            .x(drawable.extent.width as i32)
+                            .y(drawable.extent.height as i32)
+                            .z(1),
+                    ])
+                    .src_subresource(
+                        vk::ImageSubresourceLayers::default()
+                            .aspect_mask(vk::ImageAspectFlags::COLOR)
+                            .layer_count(1),
+                    )
+                    .dst_offsets([
+                        vk::Offset3D::default(),
+                        vk::Offset3D::default()
+                            .x(drawable.extent.width as i32)
+                            .y(drawable.extent.height as i32)
+                            .z(1),
+                    ])
+                    .dst_subresource(
+                        vk::ImageSubresourceLayers::default()
+                            .aspect_mask(vk::ImageAspectFlags::COLOR)
+                            .layer_count(1),
+                    )],
+                vk::Filter::LINEAR,
+            );
+
+            context.cmd_pipeline_barrier2(
+                command_buffer,
+                &vk::DependencyInfo::default().image_memory_barriers(&[
+                    vk::ImageMemoryBarrier2::default()
+                        .subresource_range(FULL_IMAGE)
+                        .image(drawable.image)
+                        .src_access_mask(vk::AccessFlags2::TRANSFER_WRITE)
+                        .src_stage_mask(vk::PipelineStageFlags2::TRANSFER)
+                        .dst_access_mask(vk::AccessFlags2::COLOR_ATTACHMENT_WRITE)
+                        .dst_stage_mask(vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT)
+                        .old_layout(vk::ImageLayout::TRANSFER_DST_OPTIMAL)
+                        .new_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL),
+                ]),
+            );
+        };
+    }
+
+    fn label(&self) -> &'static str {
+        "RT Renderer"
+    }
+}
+
+pub fn glam_to_khr(transform: glam::Affine3A) -> vk::TransformMatrixKHR {
+    let cols = transform.to_cols_array_2d();
+    vk::TransformMatrixKHR {
+        matrix: [
+            cols[0][0], cols[1][0], cols[2][0], cols[3][0], // row 0
+            cols[0][1], cols[1][1], cols[2][1], cols[3][1], // row 1
+            cols[0][2], cols[1][2], cols[2][2], cols[3][2], // row 2
+        ],
+    }
+}
+
+impl ApplicationHandler for App {
+    fn resumed(&mut self, event_loop: &winit::event_loop::ActiveEventLoop) {
+        let window = event_loop
+            .create_window(WindowAttributes::default().with_title("Hello RT"))
+            .unwrap();
+
+        let mut lazy_vulkan = LazyVulkan::from_window(&window);
+        let renderer = RTRenderer::new(&mut lazy_vulkan.renderer);
+        lazy_vulkan.add_sub_renderer(Box::new(renderer));
+
+        self.state = Some(State {
+            window,
+            lazy_vulkan,
+        });
+    }
+
+    fn window_event(
+        &mut self,
+        event_loop: &winit::event_loop::ActiveEventLoop,
+        _window_id: winit::window::WindowId,
+        event: winit::event::WindowEvent,
+    ) {
+        let Some(state) = &mut self.state else {
+            return;
+        };
+
+        use winit::event::WindowEvent;
+        match event {
+            WindowEvent::CloseRequested => {
+                event_loop.exit();
+            }
+            WindowEvent::RedrawRequested => {
+                state.lazy_vulkan.draw(&RenderState {});
+            }
+            _ => {}
+        }
+    }
+}
+
+pub struct RenderState {}
+
+pub struct RenderStateFamily;
+
+impl StateFamily for RenderStateFamily {
+    type For<'a_> = RenderState;
+}
+
+struct State {
+    window: winit::window::Window,
+    lazy_vulkan: LazyVulkan<RenderStateFamily>,
+}
+
+#[derive(Default)]
+struct App {
+    state: Option<State>,
+}
+
+// so dumb
+fn compile_shaders() {
+    let _ = std::process::Command::new("glslc")
+        .arg("shaders/closesthit.rchit")
+        .arg("-g")
+        .arg("-o")
+        .arg(CLOSEST_SHADER_PATH)
+        .arg("--target-env=vulkan1.4")
+        .spawn()
+        .unwrap()
+        .wait()
+        .unwrap();
+
+    let _ = std::process::Command::new("glslc")
+        .arg("shaders/miss.rmiss")
+        .arg("-g")
+        .arg("-o")
+        .arg(MISS_SHADER_PATH)
+        .arg("--target-env=vulkan1.4")
+        .spawn()
+        .unwrap()
+        .wait()
+        .unwrap();
+
+    let _ = std::process::Command::new("glslc")
+        .arg("shaders/raygen.rgen")
+        .arg("-g")
+        .arg("-o")
+        .arg(RAYGEN_SHADER_PATH)
+        .arg("--target-env=vulkan1.4")
+        .spawn()
+        .unwrap()
+        .wait()
+        .unwrap();
+}
+
+fn main() {
+    compile_shaders();
+    let event_loop = winit::event_loop::EventLoop::new().unwrap();
+    event_loop.set_control_flow(winit::event_loop::ControlFlow::Poll);
+    event_loop.run_app(&mut App::default()).unwrap();
+}
