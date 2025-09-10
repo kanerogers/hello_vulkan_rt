@@ -7,6 +7,5 @@ layout(location = 0) rayPayloadInEXT vec3 payload;
 
 void main() {
     // Barycentric color
-    vec3 b = vec3(1.0 - attribs.x - attribs.y, attribs.x, attribs.y);
-    payload = mix(vec3(0.2), b, 0.8);
+    payload = vec3(1.0 - attribs.x - attribs.y, attribs.x, attribs.y);
 }

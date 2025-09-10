@@ -1,5 +1,3 @@
-mod align;
-
 use std::sync::Arc;
 
 use lazy_vulkan::{
@@ -8,8 +6,6 @@ use lazy_vulkan::{
 };
 use winit::{application::ApplicationHandler, window::WindowAttributes};
 
-use crate::align::{align_up_np2, align_up_pow2};
-
 static CLOSEST_SHADER_PATH: &'static str = "shaders/closesthit.rchit.spv";
 static MISS_SHADER_PATH: &'static str = "shaders/miss.rmiss.spv";
 static RAYGEN_SHADER_PATH: &'static str = "shaders/raygen.rgen.spv";
@@ -17,15 +13,20 @@ static RAYGEN_SHADER_PATH: &'static str = "shaders/raygen.rgen.spv";
 #[repr(C)]
 #[derive(Copy, Clone)]
 struct Registers {
-    colour: glam::Vec4,
+    view_inverse: glam::Mat4,
+    proj_inverse: glam::Mat4,
 }
 
 unsafe impl bytemuck::Zeroable for Registers {}
 unsafe impl bytemuck::Pod for Registers {}
 
 pub struct RTRenderer {
-    colour: glam::Vec4,
     context: Arc<lazy_vulkan::Context>,
+    image: lazy_vulkan::Image,
+    state: Option<RTState>,
+}
+
+pub struct RTState {
     vertex_buffer: BufferAllocation<glam::Vec3>,
     instance_buffer: BufferAllocation<vk::AccelerationStructureInstanceKHR>,
     blas: vk::AccelerationStructureKHR,
@@ -37,43 +38,55 @@ pub struct RTRenderer {
     miss_region: vk::StridedDeviceAddressRegionKHR,
     hit_region: vk::StridedDeviceAddressRegionKHR,
     call_region: vk::StridedDeviceAddressRegionKHR,
-    image: lazy_vulkan::Image,
 }
 
 impl RTRenderer {
     pub fn new(renderer: &mut lazy_vulkan::Renderer<RenderStateFamily>) -> Self {
-        let context = renderer.context.clone();
-        let allocator = &mut renderer.allocator;
-        let command_buffer = unsafe {
-            context.device.allocate_command_buffers(
-                &vk::CommandBufferAllocateInfo::default()
-                    .command_buffer_count(1)
-                    .command_pool(context.command_pool),
-            )
-        }
-        .unwrap()[0];
+        let extent = renderer.get_drawable_extent();
+        let image = renderer.create_image(
+            vk::Format::R8G8B8A8_UNORM,
+            extent,
+            &[],
+            vk::ImageUsageFlags::STORAGE | vk::ImageUsageFlags::TRANSFER_SRC,
+        );
 
-        unsafe {
-            context.device.begin_command_buffer(
-                command_buffer,
-                &vk::CommandBufferBeginInfo::default()
-                    .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT),
-            )
+        Self {
+            context: renderer.context.clone(),
+            state: None,
+            image,
         }
-        .unwrap();
+    }
+}
 
-        let mut vertex_buffer = allocator.allocate_buffer(
-            1024,
+impl<'a> SubRenderer<'a> for RTRenderer {
+    type State = RenderState;
+
+    fn stage_transfers(
+        &mut self,
+        _state: &Self::State,
+        allocator: &mut lazy_vulkan::Allocator,
+        _image_manager: &mut lazy_vulkan::ImageManager,
+    ) {
+        if self.state.is_some() {
+            return;
+        }
+
+        let context = &self.context;
+        let command_buffer = context.draw_command_buffer;
+
+        let vertices = [
+            [0.0, 0.5, 0.0].into(),
+            [-0.5, -0.5, 0.0].into(),
+            [0.5, -0.5, 0.0].into(),
+        ];
+
+        let mut vertex_buffer = allocator.allocate_buffer::<glam::Vec3>(
+            std::mem::size_of_val(&vertices),
             vk::BufferUsageFlags::ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_KHR,
         );
 
-        let vertices = [
-            [0.0, -0.5, 0.0].into(),
-            [-0.5, 0.5, 0.0].into(),
-            [0.5, 0.5, 0.0].into(),
-        ];
-
         vertex_buffer.append(&vertices, allocator);
+        allocator.execute_transfers(command_buffer);
 
         let geometries = &[vk::AccelerationStructureGeometryKHR::default()
             .geometry(vk::AccelerationStructureGeometryDataKHR {
@@ -139,8 +152,6 @@ impl RTRenderer {
                 device_address: scratch_buffer.device_address,
             });
 
-        allocator.execute_transfers(command_buffer);
-
         unsafe {
             context
                 .acceleration_structure_pfn
@@ -188,6 +199,8 @@ impl RTRenderer {
                 allocator,
             )
         };
+
+        allocator.execute_transfers(command_buffer);
 
         let instance_geometries = &[vk::AccelerationStructureGeometryKHR::default()
             .geometry(vk::AccelerationStructureGeometryDataKHR {
@@ -249,8 +262,6 @@ impl RTRenderer {
             .scratch_data(vk::DeviceOrHostAddressKHR {
                 device_address: scratch_buffer.device_address,
             });
-
-        allocator.execute_transfers(command_buffer);
 
         unsafe {
             context
@@ -315,7 +326,7 @@ impl RTRenderer {
         }
         .unwrap();
 
-        let set = unsafe {
+        let descriptor_set = unsafe {
             device
                 .allocate_descriptor_sets(
                     &vk::DescriptorSetAllocateInfo::default()
@@ -330,11 +341,7 @@ impl RTRenderer {
                 &vk::PipelineLayoutCreateInfo::default()
                     .set_layouts(&[layout])
                     .push_constant_ranges(&[vk::PushConstantRange::default()
-                        .stage_flags(
-                            vk::ShaderStageFlags::RAYGEN_KHR
-                                | vk::ShaderStageFlags::CLOSEST_HIT_KHR
-                                | vk::ShaderStageFlags::ANY_HIT_KHR,
-                        )
+                        .stage_flags(vk::ShaderStageFlags::RAYGEN_KHR)
                         .size(std::mem::size_of::<Registers>() as _)]),
                 None,
             )
@@ -368,9 +375,9 @@ impl RTRenderer {
                             vk::RayTracingShaderGroupCreateInfoKHR::default()
                                 .ty(vk::RayTracingShaderGroupTypeKHR::TRIANGLES_HIT_GROUP)
                                 .any_hit_shader(vk::SHADER_UNUSED_KHR)
-                                .closest_hit_shader(vk::SHADER_UNUSED_KHR)
+                                .closest_hit_shader(closest_hit_index)
                                 .intersection_shader(vk::SHADER_UNUSED_KHR)
-                                .general_shader(closest_hit_index),
+                                .general_shader(vk::SHADER_UNUSED_KHR),
                         ])
                         .stages(&[
                             vk::PipelineShaderStageCreateInfo::default()
@@ -413,14 +420,14 @@ impl RTRenderer {
 
         let mut miss_region = vk::StridedDeviceAddressRegionKHR::default()
             .stride(handle_size_aligned)
-            .size(align_up_np2(
+            .size(align_up_pow2(
                 miss_count * handle_size_aligned,
                 raytracing_properties.shader_group_base_alignment as u64,
             ));
 
         let mut hit_region = vk::StridedDeviceAddressRegionKHR::default()
             .stride(handle_size_aligned)
-            .size(align_up_np2(
+            .size(align_up_pow2(
                 hit_count * handle_size_aligned,
                 raytracing_properties.shader_group_base_alignment as u64,
             ));
@@ -455,11 +462,11 @@ impl RTRenderer {
         sbt_data[offset..offset + handle_size as usize]
             .copy_from_slice(&handles[(handle_size as usize * 2)..(handle_size as usize) * 3]);
 
-        let mut sbt_buffer = allocator.allocate_buffer_with_alignment::<u8>(
+        let mut sbt_buffer = allocator.allocate_buffer::<u8>(
             sbt_size as usize,
-            raytracing_properties.shader_group_base_alignment as u64,
             vk::BufferUsageFlags::TRANSFER_SRC | vk::BufferUsageFlags::SHADER_BINDING_TABLE_KHR,
         );
+
         sbt_buffer.append(&sbt_data, allocator);
 
         gen_region.device_address = sbt_buffer.device_address;
@@ -468,33 +475,12 @@ impl RTRenderer {
 
         allocator.execute_transfers(command_buffer);
 
-        let fence = unsafe { device.create_fence(&vk::FenceCreateInfo::default(), None) }.unwrap();
-        unsafe {
-            context.device.end_command_buffer(command_buffer).unwrap();
-            context.device.queue_submit(
-                context.graphics_queue,
-                &[vk::SubmitInfo::default().command_buffers(&[command_buffer])],
-                fence,
-            )
-        }
-        .unwrap();
-
-        unsafe { context.device.wait_for_fences(&[fence], true, u64::MAX) }.unwrap();
-
-        let extent = renderer.get_drawable_extent();
-        let image = renderer.create_image(
-            vk::Format::R8G8B8A8_UNORM,
-            extent,
-            &[],
-            vk::ImageUsageFlags::STORAGE | vk::ImageUsageFlags::TRANSFER_SRC,
-        );
-
         unsafe {
             device.update_descriptor_sets(
                 &[
                     vk::WriteDescriptorSet::default()
                         .descriptor_type(vk::DescriptorType::ACCELERATION_STRUCTURE_KHR)
-                        .dst_set(set)
+                        .dst_set(descriptor_set)
                         .dst_binding(0)
                         .descriptor_count(1)
                         .push_next(
@@ -503,38 +489,31 @@ impl RTRenderer {
                         ),
                     vk::WriteDescriptorSet::default()
                         .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
-                        .dst_set(set)
+                        .dst_set(descriptor_set)
                         .dst_binding(1)
                         .descriptor_count(1)
                         .image_info(&[vk::DescriptorImageInfo::default()
                             .image_layout(vk::ImageLayout::GENERAL)
-                            .image_view(image.view)]),
+                            .image_view(self.image.view)]),
                 ],
                 &[],
             )
         };
 
-        Self {
-            colour: glam::Vec4::ONE,
-            context,
+        self.state = Some(RTState {
             vertex_buffer,
             instance_buffer,
             blas,
             tlas,
-            descriptor_set: set,
             pipeline,
             pipeline_layout,
-            hit_region,
+            descriptor_set,
             gen_region,
             miss_region,
+            hit_region,
             call_region,
-            image,
-        }
+        })
     }
-}
-
-impl<'a> SubRenderer<'a> for RTRenderer {
-    type State = RenderState;
 
     fn draw_layer(
         &mut self,
@@ -542,6 +521,8 @@ impl<'a> SubRenderer<'a> for RTRenderer {
         context: &lazy_vulkan::Context,
         params: lazy_vulkan::DrawParams,
     ) {
+        let Some(rt_state) = &self.state else { return };
+
         let device = &context.device;
         let command_buffer = context.draw_command_buffer;
         let drawable = &params.drawable;
@@ -550,14 +531,14 @@ impl<'a> SubRenderer<'a> for RTRenderer {
             device.cmd_bind_pipeline(
                 command_buffer,
                 vk::PipelineBindPoint::RAY_TRACING_KHR,
-                self.pipeline,
+                rt_state.pipeline,
             );
             device.cmd_bind_descriptor_sets(
                 command_buffer,
                 vk::PipelineBindPoint::RAY_TRACING_KHR,
-                self.pipeline_layout,
+                rt_state.pipeline_layout,
                 0,
-                &[self.descriptor_set],
+                &[rt_state.descriptor_set],
                 &[],
             );
             context.cmd_pipeline_barrier2(
@@ -575,12 +556,34 @@ impl<'a> SubRenderer<'a> for RTRenderer {
                 ]),
             );
 
+            let aspect_ratio = drawable.extent.width as f32 / drawable.extent.height as f32;
+            let mut perspective =
+                glam::Mat4::perspective_rh(60_f32.to_radians(), aspect_ratio, 0.01, 10000.0);
+
+            perspective.y_axis *= -1.0;
+
+            let view =
+                glam::Mat4::look_at_rh([0., 0., -4.0].into(), glam::Vec3::ZERO, glam::Vec3::Y);
+
+            let registers = Registers {
+                view_inverse: view.inverse(),
+                proj_inverse: perspective.inverse(),
+            };
+
+            device.cmd_push_constants(
+                command_buffer,
+                rt_state.pipeline_layout,
+                vk::ShaderStageFlags::RAYGEN_KHR,
+                0,
+                bytemuck::bytes_of(&registers),
+            );
+
             context.ray_tracing_pipeline_pfn.cmd_trace_rays(
                 command_buffer,
-                &self.gen_region,
-                &self.miss_region,
-                &self.hit_region,
-                &self.call_region,
+                &rt_state.gen_region,
+                &rt_state.miss_region,
+                &rt_state.hit_region,
+                &rt_state.call_region,
                 drawable.extent.width,
                 drawable.extent.height,
                 1,
@@ -675,6 +678,15 @@ pub fn glam_to_khr(transform: glam::Affine3A) -> vk::TransformMatrixKHR {
             cols[0][2], cols[1][2], cols[2][2], cols[3][2], // row 2
         ],
     }
+}
+
+pub const fn align_up_pow2(value: u64, alignment: u64) -> u64 {
+    debug_assert!(is_pow2(alignment));
+    (value + (alignment - 1)) & !(alignment - 1)
+}
+
+pub const fn is_pow2(a: u64) -> bool {
+    a != 0 && (a & (a - 1)) == 0
 }
 
 impl ApplicationHandler for App {
