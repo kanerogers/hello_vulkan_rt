@@ -1,13 +1,11 @@
 #version 460 core
 #extension GL_EXT_ray_tracing : require
+#extension GL_EXT_buffer_reference2 : require
+#extension GL_EXT_scalar_block_layout : require
+#include "common.glsl"
 
 layout(set = 0, binding = 0) uniform accelerationStructureEXT tlas;
 layout(set = 0, binding = 1, rgba8) uniform writeonly image2D outImage;
-layout(push_constant) uniform Registers {
-    mat4 viewInverse;
-    mat4 projInverse;
-} registers;
-
 layout(location = 0) rayPayloadEXT vec3 payload;
 
 void main() {

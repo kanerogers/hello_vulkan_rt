@@ -7,4 +7,5 @@ edition = "2024"
 bytemuck = "1.10"
 glam = {version = "0.30.5", features = ["bytemuck"]}
 lazy_vulkan.path = "../lazy_vulkan"
+lazy_vulkan_gltf = { version = "0.1.0", path = "../lazy_vulkan_gltf" }
 winit = "0.30.12"
