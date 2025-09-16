@@ -2,15 +2,18 @@
 #extension GL_EXT_ray_tracing : require
 #extension GL_EXT_buffer_reference2 : require
 #extension GL_EXT_scalar_block_layout : require
+#extension GL_ARB_shader_clock : enable
 #include "common.glsl"
+#include "sampling.glsl"
 
 layout(set = 0, binding = 0) uniform accelerationStructureEXT tlas;
-layout(set = 0, binding = 1, rgba8) uniform writeonly image2D outImage;
-layout(location = 0) rayPayloadEXT vec3 payload;
+layout(set = 0, binding = 1, rgba8) uniform image2D image;
+layout(location = 0) rayPayloadEXT HitPayload payload;
 
 void main() {
     const vec2 pixelCentre = vec2(gl_LaunchIDEXT.xy) + vec2(0.5);
     const vec2 inUV = pixelCentre / vec2(gl_LaunchSizeEXT.xy);
+    const ivec2 imageCoords = ivec2(gl_LaunchIDEXT.xy);
     vec2 d = inUV * 2.0 - 1.0;
 
     vec4 origin = registers.viewInverse * vec4(0, 0, 0, 1);
@@ -18,22 +21,48 @@ void main() {
     vec4 direction = registers.viewInverse * vec4(normalize(target.xyz), 0);
 
     uint rayFlags = gl_RayFlagsOpaqueEXT;
+    uint seed = tea(gl_LaunchIDEXT.y * gl_LaunchSizeEXT.x + gl_LaunchIDEXT.x, int(clockARB()));
     float tMin = 0.001;
     float tMax = 10000.0;
 
-    traceRayEXT(
-        tlas,
-        rayFlags,
-        0xFF,
-        0,
-        0,
-        0,
-        origin.xyz,
-        tMin,
-        direction.xyz,
-        tMax,
-        0
-    );
+    payload.hitValue = vec3(0);
+    payload.seed = seed;
+    payload.depth = 0;
+    payload.rayOrigin = origin.xyz;
+    payload.rayDirection = direction.xyz;
+    payload.weight = vec3(0);
 
-    imageStore(outImage, ivec2(gl_LaunchIDEXT.xy), vec4(payload, 1));
+    vec3 curWeight = vec3(1);
+    vec3 hitValue = vec3(0);
+
+    for (; payload.depth < 10; payload.depth++) {
+        traceRayEXT(
+            tlas,
+            rayFlags,
+            0xFF,
+            0, // sbtRecordOffset
+            0, // sbtRecordStride
+            0, // sbtMissIndex
+            payload.rayOrigin, // rayOrigin
+            tMin, // rayMinRange
+            payload.rayDirection, // rayDirection
+            tMax,
+            0
+        );
+
+        hitValue += payload.hitValue * curWeight;
+        curWeight *= payload.weight;
+    }
+
+    if (registers.frame == 0) {
+        // First frame, nothing to do.
+        imageStore(image, imageCoords, vec4(hitValue, 1));
+        return;
+    }
+
+    float a = 1.0f / float(registers.frame + 1);
+    vec3 oldColour = imageLoad(image, imageCoords).rgb;
+    vec3 newColour = mix(oldColour, hitValue, a);
+
+    imageStore(image, imageCoords, vec4(newColour, 1));
 }

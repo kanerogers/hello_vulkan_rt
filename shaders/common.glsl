@@ -13,6 +13,7 @@ layout(buffer_reference, scalar) readonly buffer IndexBuffer {
 
 layout(buffer_reference, scalar) readonly buffer Material {
     vec4 baseColourFactor;
+    vec3 emissiveColourFactor;
     uint baseColourTextureID;
     uint normalTextureID;
     uint metallicRoughnessTextureID;
@@ -33,4 +34,14 @@ layout(push_constant) uniform Registers {
     mat4 viewInverse;
     mat4 projInverse;
     PrimitiveBuffer primitiveBuffer;
+    uint frame;
 } registers;
+
+struct HitPayload {
+    vec3 hitValue;
+    uint seed;
+    uint depth;
+    vec3 rayOrigin;
+    vec3 rayDirection;
+    vec3 weight;
+};

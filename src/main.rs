@@ -16,6 +16,7 @@ struct Registers {
     view_inverse: glam::Mat4,
     proj_inverse: glam::Mat4,
     primitive_buffer: vk::DeviceAddress,
+    frame: u32,
 }
 
 unsafe impl bytemuck::Zeroable for Registers {}
@@ -675,7 +676,9 @@ impl<'a> SubRenderer<'a> for RTRenderer {
                         .image(self.image.handle)
                         .src_access_mask(vk::AccessFlags2::NONE)
                         .src_stage_mask(vk::PipelineStageFlags2::TOP_OF_PIPE)
-                        .dst_access_mask(vk::AccessFlags2::SHADER_WRITE)
+                        .dst_access_mask(
+                            vk::AccessFlags2::SHADER_WRITE | vk::AccessFlags2::SHADER_READ,
+                        )
                         .dst_stage_mask(vk::PipelineStageFlags2::RAY_TRACING_SHADER_KHR)
                         .old_layout(vk::ImageLayout::UNDEFINED)
                         .new_layout(vk::ImageLayout::GENERAL),
@@ -696,6 +699,7 @@ impl<'a> SubRenderer<'a> for RTRenderer {
                 view_inverse: view.inverse(),
                 proj_inverse: perspective.inverse(),
                 primitive_buffer: self.primitive_buffer.device_address,
+                frame: params.frame,
             };
 
             device.cmd_push_constants(
@@ -723,7 +727,9 @@ impl<'a> SubRenderer<'a> for RTRenderer {
                     vk::ImageMemoryBarrier2::default()
                         .subresource_range(FULL_IMAGE)
                         .image(self.image.handle)
-                        .src_access_mask(vk::AccessFlags2::SHADER_WRITE)
+                        .src_access_mask(
+                            vk::AccessFlags2::SHADER_WRITE | vk::AccessFlags2::SHADER_READ,
+                        )
                         .src_stage_mask(vk::PipelineStageFlags2::RAY_TRACING_SHADER_KHR)
                         .dst_access_mask(vk::AccessFlags2::TRANSFER_READ)
                         .dst_stage_mask(vk::PipelineStageFlags2::TRANSFER)
@@ -855,6 +861,14 @@ impl ApplicationHandler for App {
             }
             _ => {}
         }
+    }
+
+    fn about_to_wait(&mut self, _: &winit::event_loop::ActiveEventLoop) {
+        let Some(state) = &mut self.state else {
+            return;
+        };
+
+        state.window.request_redraw();
     }
 }
 
