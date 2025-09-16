@@ -11,7 +11,9 @@ layout(location = 0) rayPayloadInEXT vec3 payload;
 void main() {
     Primitive primitive = registers.primitiveBuffer.primitives[gl_InstanceCustomIndexEXT];
     IndexBuffer i = primitive.indexBuffer;
-    ivec3 triangleIndex = ivec3(i.indices[0], i.indices[1], i.indices[2]);
+    uint indexOffset = 3 * gl_PrimitiveID;
+
+    ivec3 triangleIndex = ivec3(i.indices[indexOffset], i.indices[indexOffset + 1], i.indices[indexOffset + 2]);
 
     // Barycentrics
     const vec3 barycentrics = vec3(1.0 - attribs.x - attribs.y, attribs.x, attribs.y);
@@ -26,5 +28,14 @@ void main() {
     const vec3 pos2 = v2.position;
 
     const vec3 position = pos0 * barycentrics.x + pos1 * barycentrics.y + pos2 * barycentrics.z;
-    payload = position;
+
+    const vec3 normal0 = v0.normal;
+    const vec3 normal1 = v1.normal;
+    const vec3 normal2 = v2.normal;
+
+    const vec3 normal = normal0 * barycentrics.x + normal1 * barycentrics.y + normal2 * barycentrics.z;
+    const vec3 v = vec3(1.0); // who can be bothered doing mathematics
+    const float ndotv = dot(normal, v);
+
+    payload = ndotv * primitive.material.baseColourFactor.rgb;
 }

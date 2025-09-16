@@ -22,7 +22,7 @@ layout(buffer_reference, scalar) readonly buffer Material {
 struct Primitive {
     Material material;
     IndexBuffer indexBuffer; // Points to the base of this primitive
-    VertexBuffer vertexBuffer; // Points to the base of the mesh
+    VertexBuffer vertexBuffer; // Points to the base of this primitive
 };
 
 layout(buffer_reference, scalar) readonly buffer PrimitiveBuffer {

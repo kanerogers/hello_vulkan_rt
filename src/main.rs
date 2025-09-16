@@ -15,10 +15,22 @@ static RAYGEN_SHADER_PATH: &'static str = "shaders/raygen.rgen.spv";
 struct Registers {
     view_inverse: glam::Mat4,
     proj_inverse: glam::Mat4,
+    primitive_buffer: vk::DeviceAddress,
 }
 
 unsafe impl bytemuck::Zeroable for Registers {}
 unsafe impl bytemuck::Pod for Registers {}
+
+#[repr(C)]
+#[derive(Copy, Clone, Debug)]
+struct Primitive {
+    material: vk::DeviceAddress,
+    index_buffer: vk::DeviceAddress,
+    vertex_buffer: vk::DeviceAddress,
+}
+
+unsafe impl bytemuck::Zeroable for Primitive {}
+unsafe impl bytemuck::Pod for Primitive {}
 
 pub struct RTRenderer {
     context: Arc<lazy_vulkan::Context>,
@@ -26,6 +38,7 @@ pub struct RTRenderer {
     state: Option<RTState>,
     vertex_buffer: BufferAllocation<lazy_vulkan_gltf::Vertex>,
     index_buffer: BufferAllocation<u32>,
+    primitive_buffer: BufferAllocation<Primitive>,
     instance_buffer: BufferAllocation<vk::AccelerationStructureInstanceKHR>,
     pipeline: vk::Pipeline,
     pipeline_layout: vk::PipelineLayout,
@@ -56,13 +69,19 @@ impl RTRenderer {
 
         let mut vertex_buffer = renderer.allocator.allocate_buffer(
             10 * 1024 * 1024,
-            vk::BufferUsageFlags::ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_KHR,
+            vk::BufferUsageFlags::ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_KHR
+                | vk::BufferUsageFlags::STORAGE_BUFFER,
         );
 
         let mut index_buffer = renderer.allocator.allocate_buffer(
             1024 * 1024,
-            vk::BufferUsageFlags::ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_KHR,
+            vk::BufferUsageFlags::ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_KHR
+                | vk::BufferUsageFlags::STORAGE_BUFFER,
         );
+
+        let mut primitive_buffer = renderer
+            .allocator
+            .allocate_buffer(10 * 1024 * 1024, vk::BufferUsageFlags::STORAGE_BUFFER);
 
         let asset = lazy_vulkan_gltf::load_asset(
             "test_assets/cornellBox.gltf",
@@ -74,10 +93,38 @@ impl RTRenderer {
         .unwrap();
 
         let mut instance_count = 0;
+
+        let mut primitives = HashMap::new();
         for node in &asset.nodes {
             let mesh = &asset.meshes[usize::from(node.mesh_id)];
             instance_count += mesh.primitives.len();
+
+            for primitive in &mesh.primitives {
+                let index_buffer = index_buffer.device_address
+                    + (primitive.index_buffer_offset * std::mem::size_of::<u32>() as u64);
+                let vertex_buffer = vertex_buffer.device_address + primitive.vertex_buffer_offset;
+
+                let primitive_id = primitive.id;
+                let primitive = Primitive {
+                    material: primitive.material,
+                    index_buffer,
+                    vertex_buffer,
+                };
+
+                primitives.insert(primitive_id, primitive);
+            }
         }
+
+        let mut keys = primitives.keys().copied().collect::<Vec<_>>();
+        let mut primitive_data = Vec::new();
+        keys.sort();
+        for key in keys {
+            let primitive = primitives.remove(&key).unwrap();
+            primitive_data.push(primitive);
+        }
+
+        println!("Primitive data: {primitive_data:?}");
+        primitive_buffer.append(&primitive_data, &mut renderer.allocator);
 
         // Create the instance buffer
         let instance_buffer = renderer
@@ -150,7 +197,10 @@ impl RTRenderer {
                 &vk::PipelineLayoutCreateInfo::default()
                     .set_layouts(&[layout])
                     .push_constant_ranges(&[vk::PushConstantRange::default()
-                        .stage_flags(vk::ShaderStageFlags::RAYGEN_KHR)
+                        .stage_flags(
+                            vk::ShaderStageFlags::RAYGEN_KHR
+                                | vk::ShaderStageFlags::CLOSEST_HIT_KHR,
+                        )
                         .size(std::mem::size_of::<Registers>() as _)]),
                 None,
             )
@@ -216,6 +266,7 @@ impl RTRenderer {
             image,
             vertex_buffer,
             index_buffer,
+            primitive_buffer,
             instance_buffer,
             descriptor_pool,
             descriptor_set,
@@ -644,12 +695,13 @@ impl<'a> SubRenderer<'a> for RTRenderer {
             let registers = Registers {
                 view_inverse: view.inverse(),
                 proj_inverse: perspective.inverse(),
+                primitive_buffer: self.primitive_buffer.device_address,
             };
 
             device.cmd_push_constants(
                 command_buffer,
                 self.pipeline_layout,
-                vk::ShaderStageFlags::RAYGEN_KHR,
+                vk::ShaderStageFlags::RAYGEN_KHR | vk::ShaderStageFlags::CLOSEST_HIT_KHR,
                 0,
                 bytemuck::bytes_of(&registers),
             );
