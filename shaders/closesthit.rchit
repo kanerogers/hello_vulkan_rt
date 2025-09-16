@@ -39,11 +39,8 @@ void main() {
     const vec3 normal = normal0 * barycentrics.x + normal1 * barycentrics.y + normal2 * barycentrics.z;
     const vec3 world_normal = normalize(vec3(normal * gl_WorldToObjectEXT));
 
-    const vec3 v = vec3(1.0); // who can be bothered doing mathematics
-    const float ndotv = dot(normal, v);
-
     Material material = primitive.material;
-    vec3 emittance = material.emissiveColourFactor;
+    vec3 emittance = material.emissiveColourFactor * 0.1;
 
     // Pick a random direction from here and keep going.
     vec3 tangent, bitangent;

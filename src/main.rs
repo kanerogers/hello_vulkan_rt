@@ -1,7 +1,7 @@
 use std::{collections::HashMap, sync::Arc};
 
 use lazy_vulkan::{
-    BufferAllocation, FULL_IMAGE, LazyVulkan, StateFamily, SubRenderer,
+    BufferAllocation, FULL_IMAGE, LazyVulkan, PipelineOptions, StateFamily, SubRenderer,
     ash::vk::{self, Packed24_8},
 };
 use winit::{application::ApplicationHandler, window::WindowAttributes};
@@ -9,6 +9,8 @@ use winit::{application::ApplicationHandler, window::WindowAttributes};
 static CLOSEST_SHADER_PATH: &'static str = "shaders/closesthit.rchit.spv";
 static MISS_SHADER_PATH: &'static str = "shaders/miss.rmiss.spv";
 static RAYGEN_SHADER_PATH: &'static str = "shaders/raygen.rgen.spv";
+static TONEMAPPING_SHADER_PATH: &'static str = "shaders/tonemapping.frag.spv";
+static FULLSCREEN_SHADER_PATH: &'static str = "shaders/fullscreen.vert.spv";
 
 #[repr(C)]
 #[derive(Copy, Clone)]
@@ -21,6 +23,15 @@ struct Registers {
 
 unsafe impl bytemuck::Zeroable for Registers {}
 unsafe impl bytemuck::Pod for Registers {}
+
+#[repr(C)]
+#[derive(Copy, Clone)]
+struct TonemappingRegisters {
+    texture_id: u32,
+}
+
+unsafe impl bytemuck::Zeroable for TonemappingRegisters {}
+unsafe impl bytemuck::Pod for TonemappingRegisters {}
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug)]
@@ -43,6 +54,8 @@ pub struct RTRenderer {
     instance_buffer: BufferAllocation<vk::AccelerationStructureInstanceKHR>,
     pipeline: vk::Pipeline,
     pipeline_layout: vk::PipelineLayout,
+    tonemapping_pipeline: lazy_vulkan::Pipeline,
+    tonemapping_descriptor_set: vk::DescriptorSet,
     #[allow(unused)]
     descriptor_pool: vk::DescriptorPool,
     descriptor_set: vk::DescriptorSet,
@@ -65,7 +78,9 @@ impl RTRenderer {
             vk::Format::R8G8B8A8_UNORM,
             extent,
             &[],
-            vk::ImageUsageFlags::STORAGE | vk::ImageUsageFlags::TRANSFER_SRC,
+            vk::ImageUsageFlags::STORAGE
+                | vk::ImageUsageFlags::TRANSFER_SRC
+                | vk::ImageUsageFlags::SAMPLED,
         );
 
         let mut vertex_buffer = renderer.allocator.allocate_buffer(
@@ -124,7 +139,7 @@ impl RTRenderer {
             primitive_data.push(primitive);
         }
 
-        println!("Primitive data: {primitive_data:?}");
+        log::debug!("Primitive data: {primitive_data:?}");
         primitive_buffer.append(&primitive_data, &mut renderer.allocator);
 
         // Create the instance buffer
@@ -261,6 +276,14 @@ impl RTRenderer {
         }
         .unwrap()[0];
 
+        let tonemapping_pipeline = renderer.create_pipeline_with_options::<TonemappingRegisters>(
+            FULLSCREEN_SHADER_PATH,
+            TONEMAPPING_SHADER_PATH,
+            PipelineOptions {
+                cull_mode: vk::CullModeFlags::NONE,
+            },
+        );
+
         Self {
             context: renderer.context.clone(),
             state: None,
@@ -273,6 +296,8 @@ impl RTRenderer {
             descriptor_set,
             pipeline,
             pipeline_layout,
+            tonemapping_pipeline,
+            tonemapping_descriptor_set: renderer.descriptors.set,
             asset,
         }
     }
@@ -311,7 +336,7 @@ impl RTRenderer {
                             .max_vertex(primitive.vertex_count - 1),
                     })
                     .geometry_type(vk::GeometryTypeKHR::TRIANGLES)
-                    .flags(vk::GeometryFlagsKHR::OPAQUE)];
+                    .flags(vk::GeometryFlagsKHR::NO_DUPLICATE_ANY_HIT_INVOCATION)];
 
                 let build_geometry_info = vk::AccelerationStructureBuildGeometryInfoKHR::default()
                     .ty(vk::AccelerationStructureTypeKHR::BOTTOM_LEVEL)
@@ -689,7 +714,7 @@ impl<'a> SubRenderer<'a> for RTRenderer {
             let mut perspective =
                 glam::Mat4::perspective_rh(60_f32.to_radians(), aspect_ratio, 0.01, 10000.0);
 
-            // wulkankj
+            // wulkankjzk
             perspective.y_axis *= -1.0;
 
             let view =
@@ -721,6 +746,7 @@ impl<'a> SubRenderer<'a> for RTRenderer {
                 1,
             );
 
+            // rt > fragment shader
             context.cmd_pipeline_barrier2(
                 command_buffer,
                 &vk::DependencyInfo::default().image_memory_barriers(&[
@@ -731,70 +757,84 @@ impl<'a> SubRenderer<'a> for RTRenderer {
                             vk::AccessFlags2::SHADER_WRITE | vk::AccessFlags2::SHADER_READ,
                         )
                         .src_stage_mask(vk::PipelineStageFlags2::RAY_TRACING_SHADER_KHR)
-                        .dst_access_mask(vk::AccessFlags2::TRANSFER_READ)
-                        .dst_stage_mask(vk::PipelineStageFlags2::TRANSFER)
-                        .new_layout(vk::ImageLayout::TRANSFER_SRC_OPTIMAL)
-                        .old_layout(vk::ImageLayout::GENERAL),
-                    vk::ImageMemoryBarrier2::default()
-                        .subresource_range(FULL_IMAGE)
-                        .image(drawable.image)
-                        .src_access_mask(vk::AccessFlags2::COLOR_ATTACHMENT_WRITE)
-                        .src_stage_mask(vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT)
-                        .dst_access_mask(vk::AccessFlags2::TRANSFER_WRITE)
-                        .dst_stage_mask(vk::PipelineStageFlags2::TRANSFER)
-                        .old_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
-                        .new_layout(vk::ImageLayout::TRANSFER_DST_OPTIMAL),
+                        .dst_access_mask(vk::AccessFlags2::SHADER_READ)
+                        .dst_stage_mask(vk::PipelineStageFlags2::FRAGMENT_SHADER)
+                        .old_layout(vk::ImageLayout::GENERAL)
+                        .new_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL),
                 ]),
             );
 
-            context.device.cmd_blit_image(
+            context.cmd_begin_rendering(
                 command_buffer,
-                self.image.handle,
-                vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
-                drawable.image,
-                vk::ImageLayout::TRANSFER_DST_OPTIMAL,
-                &[vk::ImageBlit::default()
-                    .src_offsets([
-                        vk::Offset3D::default(),
-                        vk::Offset3D::default()
-                            .x(drawable.extent.width as i32)
-                            .y(drawable.extent.height as i32)
-                            .z(1),
-                    ])
-                    .src_subresource(
-                        vk::ImageSubresourceLayers::default()
-                            .aspect_mask(vk::ImageAspectFlags::COLOR)
-                            .layer_count(1),
-                    )
-                    .dst_offsets([
-                        vk::Offset3D::default(),
-                        vk::Offset3D::default()
-                            .x(drawable.extent.width as i32)
-                            .y(drawable.extent.height as i32)
-                            .z(1),
-                    ])
-                    .dst_subresource(
-                        vk::ImageSubresourceLayers::default()
-                            .aspect_mask(vk::ImageAspectFlags::COLOR)
-                            .layer_count(1),
-                    )],
-                vk::Filter::LINEAR,
+                &vk::RenderingInfo::default()
+                    .render_area(drawable.extent.into())
+                    .layer_count(1)
+                    .color_attachments(&[vk::RenderingAttachmentInfo::default()
+                        .image_view(drawable.view)
+                        .image_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
+                        .load_op(vk::AttachmentLoadOp::CLEAR)
+                        .store_op(vk::AttachmentStoreOp::STORE)
+                        .clear_value(vk::ClearValue {
+                            color: vk::ClearColorValue {
+                                float32: [0.0, 0.0, 0.0, 1.0],
+                            },
+                        })]),
             );
 
-            context.cmd_pipeline_barrier2(
+            self.tonemapping_pipeline
+                .update_registers(&TonemappingRegisters {
+                    texture_id: self.image.id,
+                });
+
+            device.cmd_bind_pipeline(
                 command_buffer,
-                &vk::DependencyInfo::default().image_memory_barriers(&[
-                    vk::ImageMemoryBarrier2::default()
-                        .subresource_range(FULL_IMAGE)
-                        .image(drawable.image)
-                        .src_access_mask(vk::AccessFlags2::TRANSFER_WRITE)
-                        .src_stage_mask(vk::PipelineStageFlags2::TRANSFER)
-                        .dst_access_mask(vk::AccessFlags2::COLOR_ATTACHMENT_WRITE)
-                        .dst_stage_mask(vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT)
-                        .old_layout(vk::ImageLayout::TRANSFER_DST_OPTIMAL)
-                        .new_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL),
-                ]),
+                vk::PipelineBindPoint::GRAPHICS,
+                self.tonemapping_pipeline.handle,
             );
+            device.cmd_bind_descriptor_sets(
+                command_buffer,
+                vk::PipelineBindPoint::GRAPHICS,
+                self.tonemapping_pipeline.layout,
+                0,
+                &[self.tonemapping_descriptor_set],
+                &[],
+            );
+            device.cmd_draw(command_buffer, 3, 1, 0, 0);
+            device.cmd_end_rendering(command_buffer);
+
+            // context.device.cmd_blit_image(
+            //     command_buffer,
+            //     self.image.handle,
+            //     vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
+            //     drawable.image,
+            //     vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+            //     &[vk::ImageBlit::default()
+            //         .src_offsets([
+            //             vk::Offset3D::default(),
+            //             vk::Offset3D::default()
+            //                 .x(drawable.extent.width as i32)
+            //                 .y(drawable.extent.height as i32)
+            //                 .z(1),
+            //         ])
+            //         .src_subresource(
+            //             vk::ImageSubresourceLayers::default()
+            //                 .aspect_mask(vk::ImageAspectFlags::COLOR)
+            //                 .layer_count(1),
+            //         )
+            //         .dst_offsets([
+            //             vk::Offset3D::default(),
+            //             vk::Offset3D::default()
+            //                 .x(drawable.extent.width as i32)
+            //                 .y(drawable.extent.height as i32)
+            //                 .z(1),
+            //         ])
+            //         .dst_subresource(
+            //             vk::ImageSubresourceLayers::default()
+            //                 .aspect_mask(vk::ImageAspectFlags::COLOR)
+            //                 .layer_count(1),
+            //         )],
+            //     vk::Filter::LINEAR,
+            // );
         };
     }
 
@@ -893,53 +933,43 @@ struct App {
 
 // so dumb
 fn compile_shaders() {
-    let status = std::process::Command::new("glslc")
-        .arg("shaders/closesthit.rchit")
-        .arg("-g")
-        .arg("-o")
-        .arg(CLOSEST_SHADER_PATH)
-        .arg("--target-env=vulkan1.4")
-        .spawn()
-        .unwrap()
-        .wait()
-        .unwrap();
+    for file in std::fs::read_dir("./shaders").unwrap() {
+        let file = file.unwrap();
+        if file.file_type().unwrap().is_dir() {
+            continue;
+        }
 
-    if !status.success() {
-        panic!("Failed to compile shader!");
-    }
+        let input_path = file.path();
+        let mut output_path = input_path.clone();
+        let extension = output_path.extension().unwrap().to_string_lossy();
 
-    let status = std::process::Command::new("glslc")
-        .arg("shaders/miss.rmiss")
-        .arg("-g")
-        .arg("-o")
-        .arg(MISS_SHADER_PATH)
-        .arg("--target-env=vulkan1.4")
-        .spawn()
-        .unwrap()
-        .wait()
-        .unwrap();
+        if extension == "glsl" || extension == "spv" {
+            continue;
+        }
 
-    if !status.success() {
-        panic!("Failed to compile shader!");
-    }
+        output_path.set_extension(format!("{extension}.spv"));
 
-    let status = std::process::Command::new("glslc")
-        .arg("shaders/raygen.rgen")
-        .arg("-g")
-        .arg("-o")
-        .arg(RAYGEN_SHADER_PATH)
-        .arg("--target-env=vulkan1.4")
-        .spawn()
-        .unwrap()
-        .wait()
-        .unwrap();
+        log::debug!("[SHADERS] Compiled {input_path:?} to {output_path:?}");
 
-    if !status.success() {
-        panic!("Failed to compile shader!");
+        let status = std::process::Command::new("glslc")
+            .arg(&input_path)
+            .arg("-g")
+            .arg("-o")
+            .arg(&output_path)
+            .arg("--target-env=vulkan1.4")
+            .spawn()
+            .unwrap()
+            .wait()
+            .unwrap();
+
+        if !status.success() {
+            panic!("Failed to compile shader!");
+        }
     }
 }
 
 fn main() {
+    env_logger::init();
     compile_shaders();
     let event_loop = winit::event_loop::EventLoop::new().unwrap();
     event_loop.set_control_flow(winit::event_loop::ControlFlow::Poll);
