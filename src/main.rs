@@ -103,8 +103,8 @@ impl RTRenderer {
             "test_assets/cornellBox.gltf",
             &mut renderer.allocator,
             &mut renderer.image_manager,
-            &mut vertex_buffer,
             &mut index_buffer,
+            &mut vertex_buffer,
         )
         .unwrap();
 
@@ -116,8 +116,7 @@ impl RTRenderer {
             instance_count += mesh.primitives.len();
 
             for primitive in &mesh.primitives {
-                let index_buffer = index_buffer.device_address
-                    + (primitive.index_buffer_offset * std::mem::size_of::<u32>() as u64);
+                let index_buffer = index_buffer.device_address + primitive.index_buffer_offset;
                 let vertex_buffer = vertex_buffer.device_address + primitive.vertex_buffer_offset;
 
                 let primitive_id = primitive.id;
@@ -323,8 +322,7 @@ impl RTRenderer {
                         triangles: vk::AccelerationStructureGeometryTrianglesDataKHR::default()
                             .index_data(vk::DeviceOrHostAddressConstKHR {
                                 device_address: self.index_buffer.device_address
-                                    + (primitive.index_buffer_offset
-                                        * std::mem::size_of::<u32>() as u64),
+                                    + primitive.index_buffer_offset,
                             })
                             .index_type(vk::IndexType::UINT32)
                             .vertex_format(vk::Format::R32G32B32_SFLOAT)

@@ -780,6 +780,7 @@ dependencies = [
  "glam",
  "gltf",
  "lazy_vulkan",
+ "log",
  "png 0.17.16",
 ]
 
