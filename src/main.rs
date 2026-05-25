@@ -1,7 +1,8 @@
 use std::{collections::HashMap, sync::Arc};
 
+use anyhow::Context;
 use lazy_vulkan::{
-    BufferAllocation, FULL_IMAGE, LazyVulkan, PipelineOptions, StateFamily, SubRenderer,
+    BufferAllocation, FULL_IMAGE, LayerInfo, LazyVulkan, PipelineOptions, StateFamily, SubRenderer,
     ash::vk::{self, Packed24_8},
 };
 use winit::{application::ApplicationHandler, window::WindowAttributes};
@@ -75,6 +76,7 @@ impl RTRenderer {
     pub fn new(renderer: &mut lazy_vulkan::Renderer<RenderStateFamily>) -> Self {
         let extent = renderer.get_drawable_extent();
         let image = renderer.create_image(
+            "RT Target",
             vk::Format::R8G8B8A8_UNORM,
             extent,
             &[],
@@ -259,15 +261,15 @@ impl RTRenderer {
                             vk::PipelineShaderStageCreateInfo::default()
                                 .stage(vk::ShaderStageFlags::RAYGEN_KHR)
                                 .name(c"main")
-                                .module(lazy_vulkan::load_module(RAYGEN_SHADER_PATH, context)),
+                                .module(lazy_vulkan::load_module(&r(RAYGEN_SHADER_PATH), context)),
                             vk::PipelineShaderStageCreateInfo::default()
                                 .stage(vk::ShaderStageFlags::MISS_KHR)
                                 .name(c"main")
-                                .module(lazy_vulkan::load_module(MISS_SHADER_PATH, context)),
+                                .module(lazy_vulkan::load_module(&r(MISS_SHADER_PATH), context)),
                             vk::PipelineShaderStageCreateInfo::default()
                                 .stage(vk::ShaderStageFlags::CLOSEST_HIT_KHR)
                                 .name(c"main")
-                                .module(lazy_vulkan::load_module(CLOSEST_SHADER_PATH, context)),
+                                .module(lazy_vulkan::load_module(&r(CLOSEST_SHADER_PATH), context)),
                         ])
                         .layout(pipeline_layout)],
                     None,
@@ -276,10 +278,11 @@ impl RTRenderer {
         .unwrap()[0];
 
         let tonemapping_pipeline = renderer.create_pipeline_with_options::<TonemappingRegisters>(
-            FULLSCREEN_SHADER_PATH,
-            TONEMAPPING_SHADER_PATH,
+            &r(FULLSCREEN_SHADER_PATH),
+            &r(TONEMAPPING_SHADER_PATH),
             PipelineOptions {
                 cull_mode: vk::CullModeFlags::NONE,
+                ..Default::default()
             },
         );
 
@@ -649,6 +652,10 @@ impl RTRenderer {
     }
 }
 
+fn r(path: &str) -> Vec<u8> {
+    std::fs::read(path).context(path.to_string()).unwrap()
+}
+
 impl<'a> SubRenderer<'a> for RTRenderer {
     type State = RenderState;
 
@@ -669,13 +676,13 @@ impl<'a> SubRenderer<'a> for RTRenderer {
         &mut self,
         _state: &Self::State,
         context: &lazy_vulkan::Context,
-        params: lazy_vulkan::DrawParams,
+        layer_info: LayerInfo,
     ) {
         let Some(rt_state) = &self.state else { return };
 
         let device = &context.device;
         let command_buffer = context.draw_command_buffer;
-        let drawable = &params.drawable;
+        let drawable = &layer_info.colour_attachment.unwrap();
 
         unsafe {
             device.cmd_bind_pipeline(
@@ -722,7 +729,7 @@ impl<'a> SubRenderer<'a> for RTRenderer {
                 view_inverse: view.inverse(),
                 proj_inverse: perspective.inverse(),
                 primitive_buffer: self.primitive_buffer.device_address,
-                frame: params.frame,
+                frame: 0, // TODO
             };
 
             device.cmd_push_constants(
