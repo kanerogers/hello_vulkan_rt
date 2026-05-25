@@ -13,6 +13,9 @@ static RAYGEN_SHADER_PATH: &'static str = "shaders/raygen.rgen.spv";
 static TONEMAPPING_SHADER_PATH: &'static str = "shaders/tonemapping.frag.spv";
 static FULLSCREEN_SHADER_PATH: &'static str = "shaders/fullscreen.vert.spv";
 
+const CORRIDOR_REPEAT_COUNT: usize = 9;
+const CORRIDOR_SPACING_METRES: f32 = 5.0;
+
 #[repr(C)]
 #[derive(Copy, Clone)]
 struct Registers {
@@ -110,12 +113,12 @@ impl RTRenderer {
         )
         .unwrap();
 
-        let mut instance_count = 0;
+        let mut source_instance_count = 0;
 
         let mut primitives = HashMap::new();
         for node in &asset.nodes {
             let mesh = &asset.meshes[usize::from(node.mesh_id)];
-            instance_count += mesh.primitives.len();
+            source_instance_count += mesh.primitives.len();
 
             for primitive in &mesh.primitives {
                 let index_buffer = index_buffer.device_address + primitive.index_buffer_offset;
@@ -132,6 +135,9 @@ impl RTRenderer {
             }
         }
 
+        // Generate a corridor of instances
+        let repeated_instance_count = source_instance_count * CORRIDOR_REPEAT_COUNT;
+
         let mut keys = primitives.keys().copied().collect::<Vec<_>>();
         let mut primitive_data = Vec::new();
         keys.sort();
@@ -147,7 +153,7 @@ impl RTRenderer {
         let instance_buffer = renderer
             .allocator
             .allocate_buffer::<vk::AccelerationStructureInstanceKHR>(
-                instance_count,
+                repeated_instance_count,
                 vk::BufferUsageFlags::ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_KHR,
             );
 
@@ -406,44 +412,49 @@ impl RTRenderer {
             }
         }
 
-        for node in &self.asset.nodes {
-            let mesh = &self.asset.meshes[usize::from(node.mesh_id)];
-            for primitive in &mesh.primitives {
-                let key = format!("{}{}", mesh.id, primitive.id);
-                let Some(blas) = blas_map.get(&key).copied() else {
-                    continue;
-                };
+        for corridor_transform in
+            generate_corridor_instance_transforms(CORRIDOR_REPEAT_COUNT, CORRIDOR_SPACING_METRES)
+        {
+            for node in &self.asset.nodes {
+                let mesh = &self.asset.meshes[usize::from(node.mesh_id)];
+                for primitive in &mesh.primitives {
+                    let key = format!("{}{}", mesh.id, primitive.id);
+                    let Some(blas) = blas_map.get(&key).copied() else {
+                        continue;
+                    };
 
-                let blas_address = unsafe {
-                    self.context
-                        .acceleration_structure_pfn
-                        .get_acceleration_structure_device_address(
-                            &vk::AccelerationStructureDeviceAddressInfoKHR::default()
-                                .acceleration_structure(blas),
+                    let blas_address = unsafe {
+                        self.context
+                            .acceleration_structure_pfn
+                            .get_acceleration_structure_device_address(
+                                &vk::AccelerationStructureDeviceAddressInfoKHR::default()
+                                    .acceleration_structure(blas),
+                            )
+                    };
+
+                    unsafe {
+                        self.instance_buffer.append_unsafe(
+                            &[vk::AccelerationStructureInstanceKHR {
+                                transform: glam_to_khr(corridor_transform * node.transform),
+                                instance_custom_index_and_mask: Packed24_8::new(
+                                    primitive.id.into(),
+                                    0xFF,
+                                ),
+                                instance_shader_binding_table_record_offset_and_flags:
+                                    Packed24_8::new(
+                                        0,
+                                        vk::GeometryInstanceFlagsKHR::TRIANGLE_FACING_CULL_DISABLE
+                                            .as_raw() as _,
+                                    ),
+                                acceleration_structure_reference:
+                                    vk::AccelerationStructureReferenceKHR {
+                                        device_handle: blas_address,
+                                    },
+                            }],
+                            allocator,
                         )
-                };
-
-                unsafe {
-                    self.instance_buffer.append_unsafe(
-                        &[vk::AccelerationStructureInstanceKHR {
-                            transform: glam_to_khr(node.transform),
-                            instance_custom_index_and_mask: Packed24_8::new(
-                                primitive.id.into(),
-                                0xFF,
-                            ),
-                            instance_shader_binding_table_record_offset_and_flags: Packed24_8::new(
-                                0,
-                                vk::GeometryInstanceFlagsKHR::TRIANGLE_FACING_CULL_DISABLE.as_raw()
-                                    as _,
-                            ),
-                            acceleration_structure_reference:
-                                vk::AccelerationStructureReferenceKHR {
-                                    device_handle: blas_address,
-                                },
-                        }],
-                        allocator,
-                    )
-                };
+                    };
+                }
             }
         }
 
@@ -846,6 +857,17 @@ impl<'a> SubRenderer<'a> for RTRenderer {
     fn label(&self) -> &'static str {
         "RT Renderer"
     }
+}
+
+fn generate_corridor_instance_transforms(count: usize, spacing_meters: f32) -> Vec<glam::Affine3A> {
+    let center = (count as f32 - 1.0) * 0.5;
+
+    (0..count)
+        .map(|index| {
+            let x_offset = (index as f32 - center) * spacing_meters;
+            glam::Affine3A::from_translation(glam::vec3(x_offset, 0.0, 0.0))
+        })
+        .collect()
 }
 
 pub fn glam_to_khr(transform: glam::Affine3A) -> vk::TransformMatrixKHR {
