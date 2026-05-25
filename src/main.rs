@@ -1,4 +1,4 @@
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::HashMap, sync::Arc, time::Instant};
 
 use anyhow::Context;
 use lazy_vulkan::{
@@ -15,6 +15,7 @@ static FULLSCREEN_SHADER_PATH: &'static str = "shaders/fullscreen.vert.spv";
 
 const CORRIDOR_REPEAT_COUNT: usize = 9;
 const CORRIDOR_SPACING_METRES: f32 = 5.0;
+const CAMERA_SPEED_METRES_PER_SECOND: f32 = 2.5;
 
 #[repr(C)]
 #[derive(Copy, Clone)]
@@ -685,7 +686,7 @@ impl<'a> SubRenderer<'a> for RTRenderer {
 
     fn draw_layer(
         &mut self,
-        _state: &Self::State,
+        state: &Self::State,
         context: &lazy_vulkan::Context,
         layer_info: LayerInfo,
     ) {
@@ -733,8 +734,15 @@ impl<'a> SubRenderer<'a> for RTRenderer {
             // wulkankjzk
             perspective.y_axis *= -1.0;
 
-            let view =
-                glam::Mat4::look_at_rh([0., 0., 15.0].into(), glam::Vec3::ZERO, glam::Vec3::Y);
+            let corridor_half_length =
+                (CORRIDOR_REPEAT_COUNT as f32 - 1.0) * CORRIDOR_SPACING_METRES * 0.5;
+            let camera_x = (state.elapsed_seconds * CAMERA_SPEED_METRES_PER_SECOND).sin()
+                * corridor_half_length;
+
+            let eye = glam::vec3(camera_x, 1.5, 15.0);
+            let target = glam::vec3(camera_x + 2.5, 1.0, 0.0);
+
+            let view = glam::Mat4::look_at_rh(eye, target, glam::Vec3::Y);
 
             let registers = Registers {
                 view_inverse: view.inverse(),
@@ -905,6 +913,7 @@ impl ApplicationHandler for App {
         self.state = Some(State {
             window,
             lazy_vulkan,
+            start_time: Instant::now(),
         });
     }
 
@@ -924,7 +933,9 @@ impl ApplicationHandler for App {
                 event_loop.exit();
             }
             WindowEvent::RedrawRequested => {
-                state.lazy_vulkan.draw(&RenderState {});
+                state.lazy_vulkan.draw(&RenderState {
+                    elapsed_seconds: state.start_time.elapsed().as_secs_f32(),
+                });
             }
             _ => {}
         }
@@ -939,7 +950,9 @@ impl ApplicationHandler for App {
     }
 }
 
-pub struct RenderState {}
+pub struct RenderState {
+    elapsed_seconds: f32,
+}
 
 pub struct RenderStateFamily;
 
@@ -951,6 +964,7 @@ struct State {
     #[allow(unused)]
     window: winit::window::Window,
     lazy_vulkan: LazyVulkan<RenderStateFamily>,
+    start_time: Instant,
 }
 
 #[derive(Default)]
