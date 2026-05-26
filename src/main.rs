@@ -139,12 +139,14 @@ impl RTRenderer {
         // Generate a corridor of instances
         let repeated_instance_count = source_instance_count * CORRIDOR_REPEAT_COUNT;
 
-        let mut keys = primitives.keys().copied().collect::<Vec<_>>();
         let mut primitive_data = Vec::new();
-        keys.sort();
-        for key in keys {
-            let primitive = primitives.remove(&key).unwrap();
-            primitive_data.push(primitive);
+        for _ in 0..CORRIDOR_REPEAT_COUNT {
+            for node in &asset.nodes {
+                let mesh = &asset.meshes[usize::from(node.mesh_id)];
+                for primitive in &mesh.primitives {
+                    primitive_data.push(*primitives.get(&primitive.id).unwrap());
+                }
+            }
         }
 
         log::debug!("Primitive data: {primitive_data:?}");
@@ -736,7 +738,7 @@ impl<'a> SubRenderer<'a> for RTRenderer {
 
             let corridor_half_length =
                 (CORRIDOR_REPEAT_COUNT as f32 - 1.0) * CORRIDOR_SPACING_METRES * 0.5;
-            let camera_x = (state.elapsed_seconds * CAMERA_SPEED_METRES_PER_SECOND).sin()
+            let camera_x = (state.elapsed_seconds * CAMERA_SPEED_METRES_PER_SECOND * 0.1).sin()
                 * corridor_half_length;
 
             let eye = glam::vec3(camera_x, 1.5, 15.0);
@@ -972,39 +974,58 @@ struct App {
     state: Option<State>,
 }
 
-// so dumb
 fn compile_shaders() {
-    for file in std::fs::read_dir("./shaders").unwrap() {
-        let file = file.unwrap();
-        if file.file_type().unwrap().is_dir() {
-            continue;
-        }
+    const SHADERS: &[(&str, &str, &str)] = &[
+        (
+            "shaders/raygen.slang",
+            "raygeneration",
+            "shaders/raygen.rgen.spv",
+        ),
+        ("shaders/miss.slang", "miss", "shaders/miss.rmiss.spv"),
+        (
+            "shaders/closesthit.slang",
+            "closesthit",
+            "shaders/closesthit.rchit.spv",
+        ),
+        (
+            "shaders/fullscreen.slang",
+            "vertex",
+            "shaders/fullscreen.vert.spv",
+        ),
+        (
+            "shaders/tonemapping.slang",
+            "fragment",
+            "shaders/tonemapping.frag.spv",
+        ),
+    ];
 
-        let input_path = file.path();
-        let mut output_path = input_path.clone();
-        let extension = output_path.extension().unwrap().to_string_lossy();
+    for (input_path, stage, output_path) in SHADERS {
+        log::debug!("[SHADERS] Compiling {input_path} to {output_path}");
 
-        if extension == "glsl" || extension == "spv" {
-            continue;
-        }
-
-        output_path.set_extension(format!("{extension}.spv"));
-
-        log::debug!("[SHADERS] Compiled {input_path:?} to {output_path:?}");
-
-        let status = std::process::Command::new("glslc")
-            .arg(&input_path)
+        let status = std::process::Command::new("slangc")
+            .arg(input_path)
+            .arg("-entry")
+            .arg("main")
+            .arg("-stage")
+            .arg(stage)
+            .arg("-target")
+            .arg("spirv")
+            .arg("-profile")
+            .arg("glsl_460")
+            .arg("-emit-spirv-directly")
+            .arg("-fvk-use-entrypoint-name")
+            .arg("-matrix-layout-column-major")
+            .arg("-fvk-use-scalar-layout")
             .arg("-g")
             .arg("-o")
-            .arg(&output_path)
-            .arg("--target-env=vulkan1.4")
+            .arg(output_path)
             .spawn()
             .unwrap()
             .wait()
             .unwrap();
 
         if !status.success() {
-            panic!("Failed to compile shader!");
+            panic!("Failed to compile shader {input_path}");
         }
     }
 }
