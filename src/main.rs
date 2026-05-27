@@ -1,6 +1,7 @@
 mod demo_state;
 mod graphics;
 mod track;
+mod tunnel_mesh;
 
 use crate::{
     demo_state::DemoState,
@@ -26,6 +27,7 @@ impl ApplicationHandler for App {
 
         let track = Track::metro_loop();
         track.log_debug_samples();
+        tunnel_mesh::log_tunnel_mesh_debug(&track);
 
         self.state = Some(State {
             window,
