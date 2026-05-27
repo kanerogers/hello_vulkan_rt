@@ -14,7 +14,7 @@ static TONEMAPPING_SHADER_PATH: &'static str = "shaders/tonemapping.frag.spv";
 static FULLSCREEN_SHADER_PATH: &'static str = "shaders/fullscreen.vert.spv";
 
 const CORRIDOR_REPEAT_COUNT: usize = 9;
-const CORRIDOR_SPACING_METRES: f32 = 5.0;
+const CORRIDOR_SPACING_METRES: f32 = 11.0;
 const CAMERA_SPEED_METRES_PER_SECOND: f32 = 2.5;
 
 #[repr(C)]
@@ -1003,7 +1003,7 @@ fn compile_shaders() {
         log::debug!("[SHADERS] Compiling {input_path} to {output_path}");
 
         let status = std::process::Command::new("slangc")
-            .arg(input_path)
+            .arg(format!("./{}", input_path))
             .arg("-entry")
             .arg("main")
             .arg("-stage")
@@ -1012,7 +1012,6 @@ fn compile_shaders() {
             .arg("spirv")
             .arg("-profile")
             .arg("glsl_460")
-            .arg("-emit-spirv-directly")
             .arg("-fvk-use-entrypoint-name")
             .arg("-matrix-layout-column-major")
             .arg("-fvk-use-scalar-layout")

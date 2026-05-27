@@ -11,4 +11,5 @@ glam = {version = "0.30.5", features = ["bytemuck"]}
 lazy_vulkan = {path="../lazy_vulkan", features=["rtx_on"]}
 lazy_vulkan_gltf = { version = "0.1.0", path = "../lazy_vulkan_gltf" }
 log = "0.4.28"
+shader-slang = { git = "https://github.com/FloatyMonkey/slang-rs", version = "0.1.0" }
 winit = "0.30.12"

@@ -44,7 +44,7 @@ void main(inout HitPayload payload,
   float cosTheta = dot(rayDirection, worldNormal);
   float p = cosTheta / M_PI;
 
-  float3 albedo = material.baseColourFactor.rgb;
+  float3 albedo = saturate(material.baseColourFactor.rgb);
   float3 brdf = albedo / M_PI;
 
   payload.rayOrigin = worldPosition;
