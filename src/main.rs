@@ -13,7 +13,6 @@ use winit::{application::ApplicationHandler, window::WindowAttributes};
 
 const CORRIDOR_REPEAT_COUNT: usize = 9;
 const CORRIDOR_SPACING_METRES: f32 = 11.0;
-const CAMERA_SPEED_METRES_PER_SECOND: f32 = 2.5;
 
 impl ApplicationHandler for App {
     fn resumed(&mut self, event_loop: &winit::event_loop::ActiveEventLoop) {
@@ -58,11 +57,12 @@ impl ApplicationHandler for App {
                 let dt = (now - state.last_frame_time).as_secs_f32();
                 state.last_frame_time = now;
                 state.demo_state.update(dt);
-                let _ = state.track.sample(state.demo_state.track_s_m);
+                let train_current_frame = state.track.sample(state.demo_state.track_s_m);
 
                 state.lazy_vulkan.draw(&RenderState {
                     elapsed_seconds: state.start_time.elapsed().as_secs_f32(),
                     demo_state: &state.demo_state,
+                    train_current_frame: train_current_frame,
                 });
             }
             _ => {}

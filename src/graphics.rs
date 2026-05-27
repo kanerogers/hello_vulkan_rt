@@ -7,8 +7,7 @@ use lazy_vulkan::{
 };
 
 use crate::{
-    CAMERA_SPEED_METRES_PER_SECOND, CORRIDOR_REPEAT_COUNT, CORRIDOR_SPACING_METRES,
-    demo_state::DemoState,
+    CORRIDOR_REPEAT_COUNT, CORRIDOR_SPACING_METRES, demo_state::DemoState, track::TrackFrame,
 };
 static CLOSEST_SHADER_PATH: &'static str = "shaders/closesthit.rchit.spv";
 static MISS_SHADER_PATH: &'static str = "shaders/miss.rmiss.spv";
@@ -17,8 +16,10 @@ static TONEMAPPING_SHADER_PATH: &'static str = "shaders/tonemapping.frag.spv";
 static FULLSCREEN_SHADER_PATH: &'static str = "shaders/fullscreen.vert.spv";
 
 pub struct RenderState<'a> {
+    #[allow(unused)]
     pub elapsed_seconds: f32,
     pub demo_state: &'a DemoState,
+    pub train_current_frame: TrackFrame,
 }
 
 pub struct RenderStateFamily;
@@ -747,15 +748,7 @@ impl<'a> SubRenderer<'a> for RTRenderer {
             // wulkankjzk
             perspective.y_axis *= -1.0;
 
-            let corridor_half_length =
-                (CORRIDOR_REPEAT_COUNT as f32 - 1.0) * CORRIDOR_SPACING_METRES * 0.5;
-            let camera_x = (state.elapsed_seconds * CAMERA_SPEED_METRES_PER_SECOND * 0.1).sin()
-                * corridor_half_length;
-
-            let eye = glam::vec3(camera_x, 1.5, 15.0);
-            let target = glam::vec3(camera_x + 2.5, 1.0, 0.0);
-
-            let view = glam::Mat4::look_at_rh(eye, target, glam::Vec3::Y);
+            let view = camera_view_from_train_frame(state.train_current_frame);
 
             let registers = Registers {
                 view_inverse: view.inverse(),
@@ -911,6 +904,34 @@ pub const fn align_up_pow2(value: u64, alignment: u64) -> u64 {
 
 pub const fn is_pow2(a: u64) -> bool {
     a != 0 && (a & (a - 1)) == 0
+}
+
+fn camera_view_from_train_frame(train_frame: TrackFrame) -> glam::Mat4 {
+    // This is a camera offset in track/cab coordinates.
+    //
+    // x = lateral/right from track centre
+    // y = up from track centre
+    // z = forward along the track
+    //
+    // Negative z means the camera sits slightly behind the sampled train point,
+    // like a driver/cab viewpoint looking forward.
+    let camera_in_track = glam::vec3(0.0, 1.55, -1.5);
+
+    // Look well ahead down the tunnel. This keeps the view tangent to the track,
+    // instead of staring directly at the next centreline point.
+    let look_target_in_track = glam::vec3(0.0, 1.35, 30.0);
+
+    let track_offset_to_world = |offset_m: glam::Vec3| {
+        train_frame.origin
+            + train_frame.right * offset_m.x
+            + train_frame.up * offset_m.y
+            + train_frame.forward * offset_m.z
+    };
+
+    let eye_world = track_offset_to_world(camera_in_track);
+    let target_world = track_offset_to_world(look_target_in_track);
+
+    glam::Mat4::look_at_rh(eye_world, target_world, train_frame.up)
 }
 
 pub fn compile_shaders() {
