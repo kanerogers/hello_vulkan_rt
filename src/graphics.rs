@@ -60,6 +60,49 @@ struct Primitive {
 unsafe impl bytemuck::Zeroable for Primitive {}
 unsafe impl bytemuck::Pod for Primitive {}
 
+pub struct RTState {
+    #[allow(unused)]
+    tlas: vk::AccelerationStructureKHR,
+    gen_region: vk::StridedDeviceAddressRegionKHR,
+    miss_region: vk::StridedDeviceAddressRegionKHR,
+    hit_region: vk::StridedDeviceAddressRegionKHR,
+    call_region: vk::StridedDeviceAddressRegionKHR,
+}
+
+/// A primitive is, like a glTF primitive, the smallest unit of mesh data.
+///
+/// It has a material, and some fixed set of vertices, which are indexed by an index buffer.
+///
+/// This simple abstraction helps us manage our BLASes without needing to dick around too much.
+#[derive(Copy, Clone, Debug)]
+struct ScenePrimitive {
+    // Byte offsets into our shared buffers
+    index_offset: u64,
+    vertex_offset: u64,
+
+    // Counts used for building the BLAS
+    index_count: u32,
+    vertex_count: u32,
+
+    // Device pointer to the Material
+    material: vk::DeviceAddress,
+}
+
+/// A scene instance the atomic unit of rendering. It is, basically:
+///
+/// - A pointer to a [`ScenePrimitive`]
+/// - A transform
+///
+/// That's it.
+#[derive(Debug, Clone, Copy)]
+struct SceneInstance {
+    // Index into `scene_primitives`
+    primitive_index: usize,
+
+    // Transform
+    world_from_local: glam::Affine3A,
+}
+
 pub struct RTRenderer {
     context: Arc<lazy_vulkan::Context>,
     image: lazy_vulkan::Image,
@@ -76,15 +119,6 @@ pub struct RTRenderer {
     descriptor_pool: vk::DescriptorPool,
     descriptor_set: vk::DescriptorSet,
     asset: lazy_vulkan_gltf::LoadedAsset,
-}
-
-pub struct RTState {
-    #[allow(unused)]
-    tlas: vk::AccelerationStructureKHR,
-    gen_region: vk::StridedDeviceAddressRegionKHR,
-    miss_region: vk::StridedDeviceAddressRegionKHR,
-    hit_region: vk::StridedDeviceAddressRegionKHR,
-    call_region: vk::StridedDeviceAddressRegionKHR,
 }
 
 impl RTRenderer {
