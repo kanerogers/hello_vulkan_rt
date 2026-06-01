@@ -1,11 +1,13 @@
 mod demo_state;
 mod graphics;
+mod rt_renderer;
 mod track;
 mod tunnel_mesh;
 
 use crate::{
     demo_state::DemoState,
-    graphics::{RTRenderer, RenderState, RenderStateFamily, compile_shaders},
+    graphics::{RenderState, RenderStateFamily, compile_shaders},
+    rt_renderer::RTRenderer,
     track::Track,
 };
 use lazy_vulkan::LazyVulkan;
