@@ -80,9 +80,11 @@ pub struct RTState {
 /// This simple abstraction helps us manage our BLASes without needing to dick around too much.
 #[derive(Copy, Clone, Debug)]
 struct ScenePrimitive {
-    // Byte offsets into our shared buffers
-    index_offset: u64,
-    vertex_offset: u64,
+    // Device pointer to the Index Buffer
+    indices: vk::DeviceAddress,
+
+    // Device pointer to the Vertex Buffer
+    vertices: vk::DeviceAddress,
 
     // Counts used for building the BLAS
     index_count: u32,
@@ -123,6 +125,7 @@ pub struct RTRenderer {
     descriptor_pool: vk::DescriptorPool,
     descriptor_set: vk::DescriptorSet,
     scene_primitives: Vec<ScenePrimitive>,
+    scene_instances: Vec<SceneInstance>,
 }
 
 impl RTRenderer {
@@ -179,21 +182,44 @@ impl RTRenderer {
             }]);
 
         // Upload tunnel mesh to buffer
-        let tunnel_index_buffer_offset = index_buffer.current_size();
+        let tunnel_indices = index_buffer.tip_address();
         index_buffer.append(&tunnel_mesh.indices, &mut renderer.allocator);
 
         // Upload tunnel mesh vertices to buffer
-        let tunnel_vertex_buffer_offset = vertex_buffer.current_size();
+        let tunnel_vertices = vertex_buffer.tip_address();
         vertex_buffer.append(&tunnel_mesh.vertices, &mut renderer.allocator);
 
         // Create a scene primitive
         let scene_primitives = vec![ScenePrimitive {
-            index_offset: tunnel_index_buffer_offset,
-            vertex_offset: tunnel_vertex_buffer_offset,
+            indices: tunnel_indices,
+            vertices: tunnel_vertices,
             index_count: tunnel_mesh.indices.len() as u32,
             vertex_count: tunnel_mesh.vertices.len() as u32,
             material: tunnel_material.device_address,
         }];
+
+        let scene_instances = vec![SceneInstance {
+            primitive_index: 0,
+            world_from_local: glam::Affine3A::default(),
+        }];
+
+        let primitive_data = scene_instances
+            .iter()
+            .map(|i| {
+                let ScenePrimitive {
+                    indices,
+                    vertices,
+                    material,
+                    ..
+                } = scene_primitives[i.primitive_index];
+
+                Primitive {
+                    material,
+                    index_buffer: indices,
+                    vertex_buffer: vertices,
+                }
+            })
+            .collect::<Vec<_>>();
 
         let instance_count = 1; // TODO
 
@@ -355,6 +381,7 @@ impl RTRenderer {
             tonemapping_pipeline,
             tonemapping_descriptor_set: renderer.descriptors.set,
             scene_primitives,
+            scene_instances,
         }
     }
 
@@ -370,140 +397,85 @@ impl RTRenderer {
         // 3) `Buffer.flush(command_buffer` / `allocator.flush_buffer(buffer, command_buffer)` <-- executes just the transfers for this buffer
         allocator.execute_transfers(command_buffer);
 
-        let mut blas_map = HashMap::new();
-        for mesh in &self.asset.meshes {
-            for primitive in &mesh.primitives {
-                let primitive_count = primitive.index_count / 3;
-                let geometries = &[vk::AccelerationStructureGeometryKHR::default()
-                    .geometry(vk::AccelerationStructureGeometryDataKHR {
-                        triangles: vk::AccelerationStructureGeometryTrianglesDataKHR::default()
-                            .index_data(vk::DeviceOrHostAddressConstKHR {
-                                device_address: self.index_buffer.device_address
-                                    + primitive.index_buffer_offset,
-                            })
-                            .index_type(vk::IndexType::UINT32)
-                            .vertex_format(vk::Format::R32G32B32_SFLOAT)
-                            .vertex_data(vk::DeviceOrHostAddressConstKHR {
-                                device_address: vertex_buffer.device_address
-                                    + primitive.vertex_buffer_offset,
-                            })
-                            .vertex_stride(std::mem::size_of::<lazy_vulkan_gltf::Vertex>() as _)
-                            .max_vertex(primitive.vertex_count - 1),
-                    })
-                    .geometry_type(vk::GeometryTypeKHR::TRIANGLES)
-                    .flags(vk::GeometryFlagsKHR::NO_DUPLICATE_ANY_HIT_INVOCATION)];
+        for primitive in &self.scene_primitives {
+            let primitive_count = primitive.index_count / 3;
+            let geometries = &[vk::AccelerationStructureGeometryKHR::default()
+                .geometry(vk::AccelerationStructureGeometryDataKHR {
+                    triangles: vk::AccelerationStructureGeometryTrianglesDataKHR::default()
+                        .index_data(vk::DeviceOrHostAddressConstKHR {
+                            device_address: primitive.indices,
+                        })
+                        .index_type(vk::IndexType::UINT32)
+                        .vertex_format(vk::Format::R32G32B32_SFLOAT)
+                        .vertex_data(vk::DeviceOrHostAddressConstKHR {
+                            device_address: primitive.vertices,
+                        })
+                        .vertex_stride(std::mem::size_of::<lazy_vulkan_gltf::Vertex>() as _)
+                        .max_vertex(primitive.vertex_count - 1),
+                })
+                .geometry_type(vk::GeometryTypeKHR::TRIANGLES)
+                .flags(vk::GeometryFlagsKHR::NO_DUPLICATE_ANY_HIT_INVOCATION)];
 
-                let build_geometry_info = vk::AccelerationStructureBuildGeometryInfoKHR::default()
-                    .ty(vk::AccelerationStructureTypeKHR::BOTTOM_LEVEL)
-                    .mode(vk::BuildAccelerationStructureModeKHR::BUILD)
-                    .geometries(geometries);
+            let build_geometry_info = vk::AccelerationStructureBuildGeometryInfoKHR::default()
+                .ty(vk::AccelerationStructureTypeKHR::BOTTOM_LEVEL)
+                .mode(vk::BuildAccelerationStructureModeKHR::BUILD)
+                .geometries(geometries);
 
-                let mut size_info = vk::AccelerationStructureBuildSizesInfoKHR::default();
-                unsafe {
-                    self.context
-                        .acceleration_structure_pfn
-                        .get_acceleration_structure_build_sizes(
-                            vk::AccelerationStructureBuildTypeKHR::DEVICE,
-                            &build_geometry_info,
-                            &[primitive_count],
-                            &mut size_info,
-                        )
-                };
+            let mut size_info = vk::AccelerationStructureBuildSizesInfoKHR::default();
+            unsafe {
+                self.context
+                    .acceleration_structure_pfn
+                    .get_acceleration_structure_build_sizes(
+                        vk::AccelerationStructureBuildTypeKHR::DEVICE,
+                        &build_geometry_info,
+                        &[primitive_count],
+                        &mut size_info,
+                    )
+            };
 
-                // This is essentially opaque storage used by the driver
-                let blas_storage = allocator.allocate_buffer::<u8>(
-                    size_info.acceleration_structure_size as _,
-                    vk::BufferUsageFlags::ACCELERATION_STRUCTURE_STORAGE_KHR,
-                );
+            // This is essentially opaque storage used by the driver
+            let blas_storage = allocator.allocate_buffer::<u8>(
+                size_info.acceleration_structure_size as _,
+                vk::BufferUsageFlags::ACCELERATION_STRUCTURE_STORAGE_KHR,
+            );
 
-                let blas = unsafe {
-                    self.context
-                        .acceleration_structure_pfn
-                        .create_acceleration_structure(
-                            &vk::AccelerationStructureCreateInfoKHR::default()
-                                .ty(vk::AccelerationStructureTypeKHR::BOTTOM_LEVEL)
-                                .buffer(blas_storage.handle)
-                                .size(size_info.acceleration_structure_size),
-                            None,
-                        )
-                }
-                .unwrap();
-
-                let scratch_buffer = allocator.allocate_buffer_with_alignment::<u8>(
-                    size_info.build_scratch_size as _,
-                    self.context
-                        .raytracing_properties
-                        .min_acceleration_structure_scratch_offset_alignment
-                        as u64,
-                    vk::BufferUsageFlags::STORAGE_BUFFER,
-                );
-
-                let build_geometry_info = build_geometry_info
-                    .dst_acceleration_structure(blas)
-                    .scratch_data(vk::DeviceOrHostAddressKHR {
-                        device_address: scratch_buffer.device_address,
-                    });
-
-                unsafe {
-                    self.context
-                        .acceleration_structure_pfn
-                        .cmd_build_acceleration_structures(
-                            command_buffer,
-                            &[build_geometry_info],
-                            &[&[vk::AccelerationStructureBuildRangeInfoKHR::default()
-                                .primitive_count(primitive_count)]],
-                        )
-                };
-
-                let key = format!("{}{}", mesh.id, primitive.id);
-                blas_map.insert(key, blas);
+            let blas = unsafe {
+                self.context
+                    .acceleration_structure_pfn
+                    .create_acceleration_structure(
+                        &vk::AccelerationStructureCreateInfoKHR::default()
+                            .ty(vk::AccelerationStructureTypeKHR::BOTTOM_LEVEL)
+                            .buffer(blas_storage.handle)
+                            .size(size_info.acceleration_structure_size),
+                        None,
+                    )
             }
-        }
+            .unwrap();
 
-        for corridor_transform in
-            generate_corridor_instance_transforms(CORRIDOR_REPEAT_COUNT, CORRIDOR_SPACING_METRES)
-        {
-            for node in &self.asset.nodes {
-                let mesh = &self.asset.meshes[usize::from(node.mesh_id)];
-                for primitive in &mesh.primitives {
-                    let key = format!("{}{}", mesh.id, primitive.id);
-                    let Some(blas) = blas_map.get(&key).copied() else {
-                        continue;
-                    };
+            let scratch_buffer = allocator.allocate_buffer_with_alignment::<u8>(
+                size_info.build_scratch_size as _,
+                self.context
+                    .raytracing_properties
+                    .min_acceleration_structure_scratch_offset_alignment as u64,
+                vk::BufferUsageFlags::STORAGE_BUFFER,
+            );
 
-                    let blas_address = unsafe {
-                        self.context
-                            .acceleration_structure_pfn
-                            .get_acceleration_structure_device_address(
-                                &vk::AccelerationStructureDeviceAddressInfoKHR::default()
-                                    .acceleration_structure(blas),
-                            )
-                    };
+            let build_geometry_info = build_geometry_info
+                .dst_acceleration_structure(blas)
+                .scratch_data(vk::DeviceOrHostAddressKHR {
+                    device_address: scratch_buffer.device_address,
+                });
 
-                    unsafe {
-                        self.instance_buffer.append_unsafe(
-                            &[vk::AccelerationStructureInstanceKHR {
-                                transform: glam_to_khr(corridor_transform * node.transform),
-                                instance_custom_index_and_mask: Packed24_8::new(
-                                    primitive.id.into(),
-                                    0xFF,
-                                ),
-                                instance_shader_binding_table_record_offset_and_flags:
-                                    Packed24_8::new(
-                                        0,
-                                        vk::GeometryInstanceFlagsKHR::TRIANGLE_FACING_CULL_DISABLE
-                                            .as_raw() as _,
-                                    ),
-                                acceleration_structure_reference:
-                                    vk::AccelerationStructureReferenceKHR {
-                                        device_handle: blas_address,
-                                    },
-                            }],
-                            allocator,
-                        )
-                    };
-                }
-            }
+            unsafe {
+                self.context
+                    .acceleration_structure_pfn
+                    .cmd_build_acceleration_structures(
+                        command_buffer,
+                        &[build_geometry_info],
+                        &[&[vk::AccelerationStructureBuildRangeInfoKHR::default()
+                            .primitive_count(primitive_count)]],
+                    )
+            };
         }
 
         allocator.execute_transfers(command_buffer);
