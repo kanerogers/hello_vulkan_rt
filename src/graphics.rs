@@ -203,23 +203,27 @@ impl RTRenderer {
             world_from_local: glam::Affine3A::default(),
         }];
 
-        let primitive_data = scene_instances
+        let primitive_data: Vec<Primitive> = scene_primitives
             .iter()
-            .map(|i| {
-                let ScenePrimitive {
-                    indices,
-                    vertices,
-                    material,
-                    ..
-                } = scene_primitives[i.primitive_index];
+            .copied()
+            .map(
+                |ScenePrimitive {
+                     indices,
+                     vertices,
+                     material,
+                     index_count: _,
+                     vertex_count: _,
+                 }| {
+                    Primitive {
+                        material,
+                        index_buffer: indices,
+                        vertex_buffer: vertices,
+                    }
+                },
+            )
+            .collect();
 
-                Primitive {
-                    material,
-                    index_buffer: indices,
-                    vertex_buffer: vertices,
-                }
-            })
-            .collect::<Vec<_>>();
+        primitive_buffer.append(&primitive_data, &mut renderer.allocator);
 
         let instance_count = 1; // TODO
 
@@ -387,7 +391,6 @@ impl RTRenderer {
 
     fn create_rt_state(&mut self, allocator: &mut lazy_vulkan::Allocator) -> RTState {
         let command_buffer = self.context.draw_command_buffer;
-        let vertex_buffer = &mut self.vertex_buffer;
 
         // (TODO): This is kinda yuck.
         //
@@ -396,6 +399,9 @@ impl RTRenderer {
         // 2) `on_transferred` <-- add a functor to be called when the transfer has been recorded
         // 3) `Buffer.flush(command_buffer` / `allocator.flush_buffer(buffer, command_buffer)` <-- executes just the transfers for this buffer
         allocator.execute_transfers(command_buffer);
+
+        // First, build up our primitive buffer
+        let mut primitive_blas = Vec::with_capacity(self.scene_primitives.len());
 
         for primitive in &self.scene_primitives {
             let primitive_count = primitive.index_count / 3;
@@ -476,6 +482,45 @@ impl RTRenderer {
                             .primitive_count(primitive_count)]],
                     )
             };
+
+            // Add the BLAS to our map
+            primitive_blas.push(blas);
+        }
+
+        // Next, build our instance buffer
+        for instance in &self.scene_instances {
+            let blas = primitive_blas[instance.primitive_index];
+            let blas_address = unsafe {
+                self.context
+                    .acceleration_structure_pfn
+                    .get_acceleration_structure_device_address(
+                        &vk::AccelerationStructureDeviceAddressInfoKHR::default()
+                            .acceleration_structure(blas),
+                    )
+            };
+
+            unsafe {
+                self.instance_buffer.append_unsafe(
+                    &[vk::AccelerationStructureInstanceKHR {
+                        transform: glam_to_khr(instance.world_from_local),
+
+                        // closesthit.slang reads this via InstanceIndex()
+                        instance_custom_index_and_mask: Packed24_8::new(
+                            instance.primitive_index as u32,
+                            0xFF,
+                        ),
+
+                        instance_shader_binding_table_record_offset_and_flags: Packed24_8::new(
+                            0,
+                            vk::GeometryInstanceFlagsKHR::empty().as_raw() as _,
+                        ),
+                        acceleration_structure_reference: vk::AccelerationStructureReferenceKHR {
+                            device_handle: blas_address,
+                        },
+                    }],
+                    allocator,
+                );
+            }
         }
 
         allocator.execute_transfers(command_buffer);

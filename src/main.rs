@@ -10,7 +10,9 @@ use crate::{
 };
 use lazy_vulkan::LazyVulkan;
 use std::time::Instant;
-use winit::{application::ApplicationHandler, window::WindowAttributes};
+use winit::{
+    application::ApplicationHandler, platform::x11::WindowExtX11, window::WindowAttributes,
+};
 
 const CORRIDOR_REPEAT_COUNT: usize = 9;
 const CORRIDOR_SPACING_METRES: f32 = 11.0;
@@ -96,9 +98,13 @@ struct App {
 }
 
 fn main() {
+    use winit::platform::x11::EventLoopBuilderExtX11;
     env_logger::init();
     compile_shaders();
-    let event_loop = winit::event_loop::EventLoop::new().unwrap();
+    let event_loop = winit::event_loop::EventLoop::builder()
+        .with_x11()
+        .build()
+        .unwrap();
     event_loop.set_control_flow(winit::event_loop::ControlFlow::Poll);
     event_loop.run_app(&mut App::default()).unwrap();
 }
