@@ -1,4 +1,4 @@
-use std::{collections::HashMap, default::Default, sync::Arc};
+use std::{default::Default, sync::Arc};
 
 use anyhow::Context;
 use lazy_vulkan::{
@@ -8,10 +8,9 @@ use lazy_vulkan::{
 use lazy_vulkan_gltf::{NO_TEXTURE, TextureID};
 
 use crate::{
-    CORRIDOR_REPEAT_COUNT, CORRIDOR_SPACING_METRES,
     demo_state::{DemoState, TRACK_LENGTH_METRES},
     track::{Track, TrackFrame},
-    tunnel_mesh::{self, TunnelMeshParams, generate_tunnel_shell},
+    tunnel_mesh::generate_tunnel_shell,
 };
 static CLOSEST_SHADER_PATH: &'static str = "shaders/closesthit.rchit.spv";
 static MISS_SHADER_PATH: &'static str = "shaders/miss.rmiss.spv";
@@ -113,7 +112,9 @@ pub struct RTRenderer {
     context: Arc<lazy_vulkan::Context>,
     image: lazy_vulkan::Image,
     state: Option<RTState>,
+    #[allow(unused)]
     vertex_buffer: BufferAllocation<lazy_vulkan_gltf::Vertex>,
+    #[allow(unused)]
     index_buffer: BufferAllocation<u32>,
     primitive_buffer: BufferAllocation<Primitive>,
     instance_buffer: BufferAllocation<vk::AccelerationStructureInstanceKHR>,
@@ -225,7 +226,7 @@ impl RTRenderer {
 
         primitive_buffer.append(&primitive_data, &mut renderer.allocator);
 
-        let instance_count = 1; // TODO
+        let instance_count = scene_instances.len();
 
         // Create the instance buffer
         let instance_buffer = renderer
@@ -922,17 +923,6 @@ impl<'a> SubRenderer<'a> for RTRenderer {
     fn label(&self) -> &'static str {
         "RT Renderer"
     }
-}
-
-fn generate_corridor_instance_transforms(count: usize, spacing_meters: f32) -> Vec<glam::Affine3A> {
-    let center = (count as f32 - 1.0) * 0.5;
-
-    (0..count)
-        .map(|index| {
-            let x_offset = (index as f32 - center) * spacing_meters;
-            glam::Affine3A::from_translation(glam::vec3(x_offset, 0.0, 0.0))
-        })
-        .collect()
 }
 
 pub fn glam_to_khr(transform: glam::Affine3A) -> vk::TransformMatrixKHR {
