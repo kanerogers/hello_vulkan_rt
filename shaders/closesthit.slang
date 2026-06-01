@@ -49,6 +49,13 @@ void main(inout HitPayload payload,
 
   payload.rayOrigin = worldPosition;
   payload.rayDirection = rayDirection;
-  payload.hitValue = emittance;
-  payload.weight = brdf * cosTheta / p;
+  // payload.hitValue = emittance;
+  // payload.weight = brdf * cosTheta / p;
+
+  // Fake lighting for now
+  let lightDir = normalize(float3(0.25, 0.75, 0.35));
+  let ndotl = saturate(dot(worldNormal, lightDir));
+  payload.hitValue = albedo * (0.08 + 0.75 * ndotl);
+  payload.weight = float3(0.0);
+  payload.depth = 100;
 }

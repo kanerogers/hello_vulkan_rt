@@ -5,6 +5,7 @@ use lazy_vulkan::{
     BufferAllocation, FULL_IMAGE, LayerInfo, PipelineOptions, StateFamily, SubRenderer,
     ash::vk::{self, Packed24_8},
 };
+use lazy_vulkan_gltf::{NO_TEXTURE, TextureID};
 
 use crate::{
     CORRIDOR_REPEAT_COUNT, CORRIDOR_SPACING_METRES,
@@ -121,7 +122,7 @@ pub struct RTRenderer {
     #[allow(unused)]
     descriptor_pool: vk::DescriptorPool,
     descriptor_set: vk::DescriptorSet,
-    asset: lazy_vulkan_gltf::LoadedAsset,
+    scene_primitives: Vec<ScenePrimitive>,
 }
 
 impl RTRenderer {
@@ -162,58 +163,45 @@ impl RTRenderer {
             .allocator
             .allocate_buffer(10 * 1024 * 1024, vk::BufferUsageFlags::STORAGE_BUFFER);
 
-        let asset = lazy_vulkan_gltf::load_asset(
-            "test_assets/cornellBox.gltf",
-            &mut renderer.allocator,
-            &mut renderer.image_manager,
-            &mut index_buffer,
-            &mut vertex_buffer,
-        )
-        .unwrap();
+        let no_texture: TextureID = NO_TEXTURE.into();
 
-        let mut source_instance_count = 0;
+        // Create a simple grey concrete material
+        let tunnel_material = renderer
+            .allocator
+            .upload_to_slab(&[lazy_vulkan_gltf::GPUMaterial {
+                base_colour_factor: glam::vec4(0.55, 0.57, 0.56, 1.0),
+                emissive_colour_factor: glam::Vec3::ZERO,
 
-        let mut primitives = HashMap::new();
-        for node in &asset.nodes {
-            let mesh = &asset.meshes[usize::from(node.mesh_id)];
-            source_instance_count += mesh.primitives.len();
+                base_colour_texture: no_texture,
+                normal_texture: no_texture,
+                metallic_roughness_texture: no_texture,
+                ao_texture: no_texture,
+            }]);
 
-            for primitive in &mesh.primitives {
-                let index_buffer = index_buffer.device_address + primitive.index_buffer_offset;
-                let vertex_buffer = vertex_buffer.device_address + primitive.vertex_buffer_offset;
+        // Upload tunnel mesh to buffer
+        let tunnel_index_buffer_offset = index_buffer.current_size();
+        index_buffer.append(&tunnel_mesh.indices, &mut renderer.allocator);
 
-                let primitive_id = primitive.id;
-                let primitive = Primitive {
-                    material: primitive.material,
-                    index_buffer,
-                    vertex_buffer,
-                };
+        // Upload tunnel mesh vertices to buffer
+        let tunnel_vertex_buffer_offset = vertex_buffer.current_size();
+        vertex_buffer.append(&tunnel_mesh.vertices, &mut renderer.allocator);
 
-                primitives.insert(primitive_id, primitive);
-            }
-        }
+        // Create a scene primitive
+        let scene_primitives = vec![ScenePrimitive {
+            index_offset: tunnel_index_buffer_offset,
+            vertex_offset: tunnel_vertex_buffer_offset,
+            index_count: tunnel_mesh.indices.len() as u32,
+            vertex_count: tunnel_mesh.vertices.len() as u32,
+            material: tunnel_material.device_address,
+        }];
 
-        // Generate a corridor of instances
-        let repeated_instance_count = source_instance_count * CORRIDOR_REPEAT_COUNT;
-
-        let mut primitive_data = Vec::new();
-        for _ in 0..CORRIDOR_REPEAT_COUNT {
-            for node in &asset.nodes {
-                let mesh = &asset.meshes[usize::from(node.mesh_id)];
-                for primitive in &mesh.primitives {
-                    primitive_data.push(*primitives.get(&primitive.id).unwrap());
-                }
-            }
-        }
-
-        log::debug!("Primitive data: {primitive_data:?}");
-        primitive_buffer.append(&primitive_data, &mut renderer.allocator);
+        let instance_count = 1; // TODO
 
         // Create the instance buffer
         let instance_buffer = renderer
             .allocator
             .allocate_buffer::<vk::AccelerationStructureInstanceKHR>(
-                repeated_instance_count,
+                instance_count,
                 vk::BufferUsageFlags::ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_KHR,
             );
 
@@ -366,7 +354,7 @@ impl RTRenderer {
             pipeline_layout,
             tonemapping_pipeline,
             tonemapping_descriptor_set: renderer.descriptors.set,
-            asset,
+            scene_primitives,
         }
     }
 
