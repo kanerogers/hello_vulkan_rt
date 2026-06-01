@@ -1,4 +1,4 @@
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::HashMap, default::Default, sync::Arc};
 
 use anyhow::Context;
 use lazy_vulkan::{
@@ -7,7 +7,10 @@ use lazy_vulkan::{
 };
 
 use crate::{
-    CORRIDOR_REPEAT_COUNT, CORRIDOR_SPACING_METRES, demo_state::DemoState, track::TrackFrame,
+    CORRIDOR_REPEAT_COUNT, CORRIDOR_SPACING_METRES,
+    demo_state::{DemoState, TRACK_LENGTH_METRES},
+    track::{Track, TrackFrame},
+    tunnel_mesh::{self, TunnelMeshParams, generate_tunnel_shell},
 };
 static CLOSEST_SHADER_PATH: &'static str = "shaders/closesthit.rchit.spv";
 static MISS_SHADER_PATH: &'static str = "shaders/miss.rmiss.spv";
@@ -122,7 +125,7 @@ pub struct RTRenderer {
 }
 
 impl RTRenderer {
-    pub fn new(renderer: &mut lazy_vulkan::Renderer<RenderStateFamily>) -> Self {
+    pub fn new(renderer: &mut lazy_vulkan::Renderer<RenderStateFamily>, track: &Track) -> Self {
         let extent = renderer.get_drawable_extent();
         let image = renderer.create_image(
             "RT Target",
@@ -144,6 +147,15 @@ impl RTRenderer {
             1024 * 1024,
             vk::BufferUsageFlags::ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_KHR
                 | vk::BufferUsageFlags::STORAGE_BUFFER,
+        );
+
+        let tunnel_mesh =
+            generate_tunnel_shell(track, 0.0, TRACK_LENGTH_METRES, Default::default());
+
+        log::info!(
+            "Generated tunnel mesh: vertices={} indices={}",
+            tunnel_mesh.vertices.len(),
+            tunnel_mesh.indices.len()
         );
 
         let mut primitive_buffer = renderer

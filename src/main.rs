@@ -22,10 +22,10 @@ impl ApplicationHandler for App {
             .unwrap();
 
         let mut lazy_vulkan = LazyVulkan::from_window(&window);
-        let renderer = RTRenderer::new(&mut lazy_vulkan.renderer);
+        let track = Track::metro_loop();
+        let renderer = RTRenderer::new(&mut lazy_vulkan.renderer, &track);
         lazy_vulkan.add_sub_renderer(Box::new(renderer));
 
-        let track = Track::metro_loop();
         track.log_debug_samples();
         tunnel_mesh::log_tunnel_mesh_debug(&track);
 
