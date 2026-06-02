@@ -11,7 +11,7 @@ use crate::{
     demo_state::{DemoState, TRACK_LENGTH_METRES},
     graphics::{RenderState, RenderStateFamily},
     track::{Track, TrackFrame},
-    tunnel_mesh::generate_tunnel_shell,
+    tunnel_mesh::{generate_slab_bed, generate_tunnel_shell},
 };
 
 static CLOSEST_SHADER_PATH: &'static str = "shaders/closesthit.rchit.spv";
@@ -417,19 +417,53 @@ impl SceneData {
         // Upload tunnel mesh to buffer
         let tunnel_indices = index_buffer.tip_address();
         index_buffer.append(&tunnel_mesh.indices, &mut renderer.allocator);
-
-        // Upload tunnel mesh vertices to buffer
         let tunnel_vertices = vertex_buffer.tip_address();
         vertex_buffer.append(&tunnel_mesh.vertices, &mut renderer.allocator);
 
-        // Create a scene primitive
-        let scene_primitives = vec![ScenePrimitive {
-            indices: tunnel_indices,
-            vertices: tunnel_vertices,
-            index_count: tunnel_mesh.indices.len() as u32,
-            vertex_count: tunnel_mesh.vertices.len() as u32,
-            material: tunnel_material.device_address,
-        }];
+        // Generate the slab bed mesh
+        let slab_mesh = generate_slab_bed(track, 0.0, TRACK_LENGTH_METRES);
+
+        log::info!(
+            "Generated slab bed mesh: vertices={} indices={}",
+            slab_mesh.vertices.len(),
+            slab_mesh.indices.len()
+        );
+
+        // Upload slab bed mesh to buffer
+        let slab_indices = index_buffer.tip_address();
+        index_buffer.append(&slab_mesh.indices, &mut renderer.allocator);
+        let slab_vertices = vertex_buffer.tip_address();
+        vertex_buffer.append(&slab_mesh.vertices, &mut renderer.allocator);
+
+        let slab_material = renderer
+            .allocator
+            .upload_to_slab(&[lazy_vulkan_gltf::GPUMaterial {
+                base_colour_factor: glam::vec4(0.32, 0.33, 0.33, 1.0),
+                emissive_colour_factor: glam::Vec3::ZERO,
+
+                base_colour_texture: no_texture,
+                normal_texture: no_texture,
+                metallic_roughness_texture: no_texture,
+                ao_texture: no_texture,
+            }]);
+
+        // Create our scene primitives
+        let scene_primitives = vec![
+            ScenePrimitive {
+                indices: tunnel_indices,
+                vertices: tunnel_vertices,
+                index_count: tunnel_mesh.indices.len() as u32,
+                vertex_count: tunnel_mesh.vertices.len() as u32,
+                material: tunnel_material.device_address,
+            },
+            ScenePrimitive {
+                indices: slab_indices,
+                vertices: slab_vertices,
+                index_count: slab_mesh.indices.len() as u32,
+                vertex_count: slab_mesh.vertices.len() as u32,
+                material: slab_material.device_address,
+            },
+        ];
 
         // Append the data to our primitive buffer
         let primitive_data: Vec<Primitive> = scene_primitives
@@ -454,10 +488,16 @@ impl SceneData {
         primitive_buffer.append(&primitive_data, &mut renderer.allocator);
 
         // Create the scene instances
-        let scene_instances = vec![SceneInstance {
-            primitive_index: 0,
-            world_from_local: glam::Affine3A::default(),
-        }];
+        let scene_instances = vec![
+            SceneInstance {
+                primitive_index: 0,
+                world_from_local: glam::Affine3A::default(),
+            },
+            SceneInstance {
+                primitive_index: 1,
+                world_from_local: glam::Affine3A::default(),
+            },
+        ];
 
         // Create the instance buffer
         let instance_buffer = renderer
@@ -626,7 +666,7 @@ fn create_instance(
 
                 instance_shader_binding_table_record_offset_and_flags: Packed24_8::new(
                     0,
-                    vk::GeometryInstanceFlagsKHR::empty().as_raw() as _,
+                    vk::GeometryInstanceFlagsKHR::TRIANGLE_FACING_CULL_DISABLE.as_raw() as _,
                 ),
                 acceleration_structure_reference: vk::AccelerationStructureReferenceKHR {
                     device_handle: blas_address,
