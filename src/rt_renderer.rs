@@ -11,7 +11,7 @@ use crate::{
     demo_state::{DemoState, TRACK_LENGTH_METRES},
     graphics::{RenderState, RenderStateFamily},
     track::{Track, TrackFrame},
-    tunnel_mesh::{generate_rails, generate_slab_bed, generate_tunnel_shell},
+    tunnel_mesh::{self, generate_rails, generate_slab_bed, generate_tunnel_shell},
 };
 
 static CLOSEST_SHADER_PATH: &'static str = "shaders/closesthit.rchit.spv";
@@ -399,26 +399,27 @@ impl SceneData {
             tunnel_mesh.indices.len()
         );
 
-        let no_texture: TextureID = NO_TEXTURE.into();
-
-        // Create a simple grey concrete material
-        let tunnel_material = renderer
-            .allocator
-            .upload_to_slab(&[lazy_vulkan_gltf::GPUMaterial {
-                base_colour_factor: glam::vec4(0.55, 0.57, 0.56, 1.0),
-                emissive_colour_factor: glam::Vec3::ZERO,
-
-                base_colour_texture: no_texture,
-                normal_texture: no_texture,
-                metallic_roughness_texture: no_texture,
-                ao_texture: no_texture,
-            }]);
-
         // Upload tunnel mesh to buffer
         let tunnel_indices = index_buffer.tip_address();
         index_buffer.append(&tunnel_mesh.indices, &mut renderer.allocator);
         let tunnel_vertices = vertex_buffer.tip_address();
         vertex_buffer.append(&tunnel_mesh.vertices, &mut renderer.allocator);
+
+        let no_texture: TextureID = NO_TEXTURE.into();
+
+        // Create a simple grey concrete material
+        let concrete_material =
+            renderer
+                .allocator
+                .upload_to_slab(&[lazy_vulkan_gltf::GPUMaterial {
+                    base_colour_factor: glam::vec4(0.55, 0.57, 0.56, 1.0),
+                    emissive_colour_factor: glam::Vec3::ZERO,
+
+                    base_colour_texture: no_texture,
+                    normal_texture: no_texture,
+                    metallic_roughness_texture: no_texture,
+                    ao_texture: no_texture,
+                }]);
 
         // Generate the slab bed mesh
         let slab_mesh = generate_slab_bed(track, 0.0, TRACK_LENGTH_METRES);
@@ -461,6 +462,7 @@ impl SceneData {
             rail_mesh.indices.len()
         );
 
+        // Make rail material
         let rail_material = renderer
             .allocator
             .upload_to_slab(&[lazy_vulkan_gltf::GPUMaterial {
@@ -472,6 +474,14 @@ impl SceneData {
                 ao_texture: no_texture,
             }]);
 
+        // Generate the service walkway
+        let service_walkway_mesh =
+            tunnel_mesh::generate_service_walkway(track, 0.0, TRACK_LENGTH_METRES);
+        let service_walkway_indices = index_buffer.tip_address();
+        index_buffer.append(&service_walkway_mesh.indices, &mut renderer.allocator);
+        let service_walkway_vertices = vertex_buffer.tip_address();
+        vertex_buffer.append(&service_walkway_mesh.vertices, &mut renderer.allocator);
+
         // Create our scene primitives
         let scene_primitives = vec![
             ScenePrimitive {
@@ -479,7 +489,7 @@ impl SceneData {
                 vertices: tunnel_vertices,
                 index_count: tunnel_mesh.indices.len() as u32,
                 vertex_count: tunnel_mesh.vertices.len() as u32,
-                material: tunnel_material.device_address,
+                material: concrete_material.device_address,
             },
             ScenePrimitive {
                 indices: slab_indices,
@@ -494,6 +504,13 @@ impl SceneData {
                 index_count: rail_mesh.indices.len() as u32,
                 vertex_count: rail_mesh.vertices.len() as u32,
                 material: rail_material.device_address,
+            },
+            ScenePrimitive {
+                indices: service_walkway_indices,
+                vertices: service_walkway_vertices,
+                index_count: service_walkway_mesh.indices.len() as u32,
+                vertex_count: service_walkway_mesh.vertices.len() as u32,
+                material: concrete_material.device_address,
             },
         ];
 
@@ -531,6 +548,10 @@ impl SceneData {
             },
             SceneInstance {
                 primitive_index: 2,
+                world_from_local: glam::Affine3A::default(),
+            },
+            SceneInstance {
+                primitive_index: 3,
                 world_from_local: glam::Affine3A::default(),
             },
         ];

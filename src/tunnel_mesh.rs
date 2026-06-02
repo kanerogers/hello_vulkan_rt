@@ -177,6 +177,59 @@ pub fn generate_rails(track: &Track, start_s_m: f32, length_m: f32) -> TunnelMes
     TunnelMesh { vertices, indices }
 }
 
+pub fn generate_service_walkway(track: &Track, start_s_m: f32, length_m: f32) -> TunnelMesh {
+    let ring_spacing_m = 2.0;
+
+    // Right side of tunnel, in track space.
+    let inner_x_m = 2.05;
+    let outer_x_m = 3.05;
+    let top_y_m = -0.78;
+    let bottom_y_m = -1.08;
+
+    let ring_count = (length_m / ring_spacing_m).ceil() as usize + 1;
+    let verts_per_ring = 4;
+
+    let mut vertices = Vec::with_capacity(ring_count * verts_per_ring);
+    let mut indices = Vec::new();
+
+    for ring_index in 0..ring_count {
+        let ring_t = ring_index as f32 / (ring_count - 1) as f32;
+        let s_m = start_s_m + ring_t * length_m;
+        let frame = track.sample(s_m);
+
+        let corners = [
+            (inner_x_m, top_y_m, frame.up),
+            (outer_x_m, top_y_m, frame.up),
+            (outer_x_m, bottom_y_m, frame.right),
+            (inner_x_m, bottom_y_m, -frame.right),
+        ];
+
+        for (corner_index, (x_m, y_m, normal)) in corners.into_iter().enumerate() {
+            let position = frame.origin + frame.right * x_m + frame.up * y_m;
+            let uv = glam::vec2(corner_index as f32, s_m);
+
+            vertices.push(Vertex::new(position, normal, Some(uv)));
+        }
+    }
+
+    for ring_index in 0..(ring_count - 1) {
+        let base0 = (ring_index * verts_per_ring) as u32;
+        let base1 = base0 + verts_per_ring as u32;
+
+        // top, outer face, inner face. Bottom omitted.
+        for (a, b) in [(0, 1), (1, 2), (3, 0)] {
+            let v0 = base0 + a;
+            let v1 = base0 + b;
+            let v2 = base1 + a;
+            let v3 = base1 + b;
+
+            indices.extend_from_slice(&[v0, v2, v1, v1, v2, v3]);
+        }
+    }
+
+    TunnelMesh { vertices, indices }
+}
+
 fn lerp(a: f32, b: f32, t: f32) -> f32 {
     a + (b - a) * t
 }
@@ -247,6 +300,26 @@ mod tests {
 
         assert_eq!(mesh.vertices.len(), 168);
         assert_eq!(mesh.indices.len(), 720);
+        assert_eq!(mesh.indices.len() % 3, 0);
+    }
+
+    #[test]
+    fn service_walkway_chunks_share_exact_seam_vertices() {
+        let track = Track::metro_loop();
+
+        let a = generate_service_walkway(&track, 1_190.0, 20.0);
+        let b = generate_service_walkway(&track, 1_210.0, 20.0);
+
+        assert!(max_shared_ring_error(&a, &b, 4) < 0.0001);
+    }
+
+    #[test]
+    fn service_walkway_has_expected_topology() {
+        let track = Track::metro_loop();
+        let mesh = generate_service_walkway(&track, 0.0, 20.0);
+
+        assert_eq!(mesh.vertices.len(), 44);
+        assert_eq!(mesh.indices.len(), 180);
         assert_eq!(mesh.indices.len() % 3, 0);
     }
 }
