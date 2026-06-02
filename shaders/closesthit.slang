@@ -15,12 +15,18 @@ void main(inout HitPayload payload,
   float3 barycentrics =
       float3(1.0 - attribs.x - attribs.y, attribs.x, attribs.y);
 
+  // Extract the vertices
   Vertex v0 = primitive.vertexBuffer[triangleIndex.x];
   Vertex v1 = primitive.vertexBuffer[triangleIndex.y];
   Vertex v2 = primitive.vertexBuffer[triangleIndex.z];
 
-  float3 position = v0.position * barycentrics.x +
-                    v1.position * barycentrics.y + v2.position * barycentrics.z;
+  // Get the uv
+  let uv =
+      v0.uv * barycentrics.x + v1.uv * barycentrics.y + v2.uv * barycentrics.z;
+
+  // Position
+  let position = v0.position * barycentrics.x + v1.position * barycentrics.y +
+                 v2.position * barycentrics.z;
 
   float3x4 objectToWorld = ObjectToWorld3x4();
   float3 worldPosition = mul(objectToWorld, float4(position, 1.0));
@@ -44,7 +50,12 @@ void main(inout HitPayload payload,
   float cosTheta = dot(rayDirection, worldNormal);
   float p = cosTheta / M_PI;
 
-  float3 albedo = saturate(material.baseColourFactor.rgb);
+  let baseAlbedo = saturate(material.baseColourFactor.rgb);
+
+  let panelPhase = frac(uv.y / 10.0);
+  let panelBand = panelPhase < 0.0100 ? 0.05 : 1.0;
+  let albedo = baseAlbedo * panelBand;
+
   float3 brdf = albedo / M_PI;
 
   payload.rayOrigin = worldPosition;
