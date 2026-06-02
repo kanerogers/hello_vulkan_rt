@@ -8,7 +8,7 @@ use lazy_vulkan::{
 use lazy_vulkan_gltf::{NO_TEXTURE, TextureID};
 
 use crate::{
-    demo_state::TRACK_LENGTH_METRES,
+    demo_state::{DemoState, TRACK_LENGTH_METRES},
     graphics::{RenderState, RenderStateFamily},
     track::{Track, TrackFrame},
     tunnel_mesh::generate_tunnel_shell,
@@ -708,7 +708,7 @@ impl<'a> SubRenderer<'a> for RTRenderer {
             // wulkankjzk
             perspective.y_axis *= -1.0;
 
-            let view = camera_view_from_train_frame(state.train_current_frame);
+            let view = camera_view_from_train_frame(state.train_current_frame, state.demo_state);
 
             let registers = Registers {
                 view_inverse: view.inverse(),
@@ -916,20 +916,17 @@ unsafe impl bytemuck::Zeroable for TonemappingRegisters {}
 unsafe impl bytemuck::Pod for TonemappingRegisters {}
 
 /// Camera helpers
-fn camera_view_from_train_frame(train_frame: TrackFrame) -> glam::Mat4 {
-    // This is a camera offset in track/cab coordinates.
-    //
-    // x = lateral/right from track centre
-    // y = up from track centre
-    // z = forward along the track
-    //
-    // Negative z means the camera sits slightly behind the sampled train point,
-    // like a driver/cab viewpoint looking forward.
-    let camera_in_track = glam::vec3(0.0, 1.55, -1.5);
+fn camera_view_from_train_frame(train_frame: TrackFrame, demo_state: &DemoState) -> glam::Mat4 {
+    let speed_fraction = (demo_state.speed_mps / (150.0 / 3.6)).clamp(0.0, 1.0);
+    let t = demo_state.elapsed_s;
 
-    // Look well ahead down the tunnel. This keeps the view tangent to the track,
-    // instead of staring directly at the next centreline point.
-    let look_target_in_track = glam::vec3(0.0, 1.35, 30.0);
+    // A bit of cab-space motion
+    let sway_x_m = (t * 1.7).sin() * speed_fraction * 0.35;
+    let bob_y_m = (t * 4.2).sin() * speed_fraction * 0.12;
+    let nod_y_m = (t * 3.1).sin() * speed_fraction * 0.25;
+
+    let camera_in_track = glam::vec3(sway_x_m, 1.55 + bob_y_m + nod_y_m, -1.5);
+    let look_target_in_track = glam::vec3(sway_x_m * 0.35, 1.35 + bob_y_m + nod_y_m, 30.0);
 
     let track_offset_to_world = |offset_m: glam::Vec3| {
         train_frame.origin
@@ -939,6 +936,7 @@ fn camera_view_from_train_frame(train_frame: TrackFrame) -> glam::Mat4 {
     };
 
     let eye_world = track_offset_to_world(camera_in_track);
+
     let target_world = track_offset_to_world(look_target_in_track);
 
     glam::Mat4::look_at_rh(eye_world, target_world, train_frame.up)
