@@ -14,6 +14,9 @@ use lazy_vulkan::LazyVulkan;
 use std::time::Instant;
 use winit::{application::ApplicationHandler, window::WindowAttributes};
 
+const FIXED_TIMESTEP_S: f32 = 1.0 / 120.0;
+const MAX_FRAME_TIME_S: f32 = 0.25;
+
 impl ApplicationHandler for App {
     fn resumed(&mut self, event_loop: &winit::event_loop::ActiveEventLoop) {
         let window = event_loop
@@ -34,6 +37,7 @@ impl ApplicationHandler for App {
             last_frame_time: Instant::now(),
             demo_state: DemoState::default(),
             track,
+            fixed_time_accumulator_s: 0.0,
         });
     }
 
@@ -54,9 +58,18 @@ impl ApplicationHandler for App {
             }
             WindowEvent::RedrawRequested => {
                 let now = Instant::now();
-                let dt = (now - state.last_frame_time).as_secs_f32();
+                let frame_time_s = (now - state.last_frame_time)
+                    .as_secs_f32()
+                    .min(MAX_FRAME_TIME_S);
+
                 state.last_frame_time = now;
-                state.demo_state.update(dt);
+                state.fixed_time_accumulator_s += frame_time_s;
+
+                while state.fixed_time_accumulator_s >= FIXED_TIMESTEP_S {
+                    state.demo_state.update(FIXED_TIMESTEP_S);
+                    state.fixed_time_accumulator_s -= FIXED_TIMESTEP_S;
+                }
+
                 let train_current_frame = state.track.sample(state.demo_state.track_s_m);
 
                 state.lazy_vulkan.draw(&RenderState {
@@ -86,6 +99,7 @@ struct State {
     last_frame_time: Instant,
     demo_state: DemoState,
     track: Track,
+    fixed_time_accumulator_s: f32,
 }
 
 #[derive(Default)]
