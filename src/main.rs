@@ -1,8 +1,8 @@
 mod demo_state;
 mod graphics;
+mod mesh_generation;
 mod rt_renderer;
 mod track;
-mod tunnel_mesh;
 
 use crate::{
     demo_state::DemoState,

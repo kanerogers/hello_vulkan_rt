@@ -29,8 +29,8 @@ pub struct TrackFrame {
 /// will all attach to this one source of truth.
 #[derive(Debug)]
 pub struct Track {
-    segments: Vec<TrackSegment>,
-    length_m: f32,
+    pub segments: Vec<TrackSegment>,
+    pub length_m: f32,
 }
 
 /// One piece of the track.
@@ -40,7 +40,7 @@ pub struct Track {
 /// to the previous frame. That means sampling `s=3000m` does not require
 /// applying 3000 tiny transforms and accumulating numerical drift.
 #[derive(Copy, Clone, Debug)]
-struct TrackSegment {
+pub struct TrackSegment {
     start_s_m: f32,
     length_m: f32,
     start_origin: glam::Vec3,

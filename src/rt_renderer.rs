@@ -10,8 +10,11 @@ use lazy_vulkan_gltf::{NO_TEXTURE, TextureID};
 use crate::{
     demo_state::{DemoState, TRACK_LENGTH_METRES},
     graphics::{RenderState, RenderStateFamily},
+    mesh_generation::{
+        self, generate_cable_tray, generate_rails, generate_service_walkway, generate_slab_bed,
+        generate_tunnel_shell,
+    },
     track::{Track, TrackFrame},
-    tunnel_mesh::{self, generate_rails, generate_slab_bed, generate_tunnel_shell},
 };
 
 static CLOSEST_SHADER_PATH: &'static str = "shaders/closesthit.rchit.spv";
@@ -397,126 +400,56 @@ impl SceneData {
         let tunnel_mesh =
             generate_tunnel_shell(track, 0.0, TRACK_LENGTH_METRES, Default::default());
 
-        log::info!(
-            "Generated tunnel mesh: vertices={} indices={}",
-            tunnel_mesh.vertices.len(),
-            tunnel_mesh.indices.len()
+        let tunnel = create_scene_primitive(
+            renderer,
+            &mut vertex_buffer,
+            &mut index_buffer,
+            tunnel_mesh,
+            glam::vec4(0.55, 0.57, 0.56, 1.0),
         );
-
-        // Upload tunnel mesh to buffer
-        let tunnel_indices = index_buffer.tip_address();
-        index_buffer.append(&tunnel_mesh.indices, &mut renderer.allocator);
-        let tunnel_vertices = vertex_buffer.tip_address();
-        vertex_buffer.append(&tunnel_mesh.vertices, &mut renderer.allocator);
-
-        let no_texture: TextureID = NO_TEXTURE.into();
-
-        // Create a simple grey concrete material
-        let concrete_material =
-            renderer
-                .allocator
-                .upload_to_slab(&[lazy_vulkan_gltf::GPUMaterial {
-                    base_colour_factor: glam::vec4(0.55, 0.57, 0.56, 1.0),
-                    emissive_colour_factor: glam::Vec3::ZERO,
-
-                    base_colour_texture: no_texture,
-                    normal_texture: no_texture,
-                    metallic_roughness_texture: no_texture,
-                    ao_texture: no_texture,
-                }]);
 
         // Generate the slab bed mesh
-        let slab_mesh = generate_slab_bed(track, 0.0, TRACK_LENGTH_METRES);
-
-        log::info!(
-            "Generated slab bed mesh: vertices={} indices={}",
-            slab_mesh.vertices.len(),
-            slab_mesh.indices.len()
+        let slab_bed_mesh = generate_slab_bed(track, 0.0, TRACK_LENGTH_METRES);
+        let slab_bed = create_scene_primitive(
+            renderer,
+            &mut vertex_buffer,
+            &mut index_buffer,
+            slab_bed_mesh,
+            glam::vec4(0.32, 0.33, 0.33, 1.0),
         );
-
-        // Upload slab bed mesh to buffer
-        let slab_indices = index_buffer.tip_address();
-        index_buffer.append(&slab_mesh.indices, &mut renderer.allocator);
-        let slab_vertices = vertex_buffer.tip_address();
-        vertex_buffer.append(&slab_mesh.vertices, &mut renderer.allocator);
-
-        // Make a slab material
-        let slab_material = renderer
-            .allocator
-            .upload_to_slab(&[lazy_vulkan_gltf::GPUMaterial {
-                base_colour_factor: glam::vec4(0.32, 0.33, 0.33, 1.0),
-                emissive_colour_factor: glam::Vec3::ZERO,
-
-                base_colour_texture: no_texture,
-                normal_texture: no_texture,
-                metallic_roughness_texture: no_texture,
-                ao_texture: no_texture,
-            }]);
 
         // Generate the rails
         let rail_mesh = generate_rails(&track, 0.0, TRACK_LENGTH_METRES);
-        let rail_indices = index_buffer.tip_address();
-        index_buffer.append(&rail_mesh.indices, &mut renderer.allocator);
-        let rail_vertices = vertex_buffer.tip_address();
-        vertex_buffer.append(&rail_mesh.vertices, &mut renderer.allocator);
-
-        log::info!(
-            "Generated rail mesh: vertices={} indices={}",
-            rail_mesh.vertices.len(),
-            rail_mesh.indices.len()
+        let rails = create_scene_primitive(
+            renderer,
+            &mut vertex_buffer,
+            &mut index_buffer,
+            rail_mesh,
+            glam::vec4(0.10, 0.105, 0.11, 1.0),
         );
 
-        // Make rail material
-        let rail_material = renderer
-            .allocator
-            .upload_to_slab(&[lazy_vulkan_gltf::GPUMaterial {
-                base_colour_factor: glam::vec4(0.10, 0.105, 0.11, 1.0),
-                emissive_colour_factor: glam::Vec3::ZERO,
-                base_colour_texture: no_texture,
-                normal_texture: no_texture,
-                metallic_roughness_texture: no_texture,
-                ao_texture: no_texture,
-            }]);
-
         // Generate the service walkway
-        let service_walkway_mesh =
-            tunnel_mesh::generate_service_walkway(track, 0.0, TRACK_LENGTH_METRES);
-        let service_walkway_indices = index_buffer.tip_address();
-        index_buffer.append(&service_walkway_mesh.indices, &mut renderer.allocator);
-        let service_walkway_vertices = vertex_buffer.tip_address();
-        vertex_buffer.append(&service_walkway_mesh.vertices, &mut renderer.allocator);
+        let service_walkway_mesh = generate_service_walkway(track, 0.0, TRACK_LENGTH_METRES);
+        let service_walkway = create_scene_primitive(
+            renderer,
+            &mut vertex_buffer,
+            &mut index_buffer,
+            service_walkway_mesh,
+            glam::vec4(0.55, 0.57, 0.56, 1.0),
+        );
 
-        // Create our scene primitives
-        let scene_primitives = vec![
-            ScenePrimitive {
-                indices: tunnel_indices,
-                vertices: tunnel_vertices,
-                index_count: tunnel_mesh.indices.len() as u32,
-                vertex_count: tunnel_mesh.vertices.len() as u32,
-                material: concrete_material.device_address,
-            },
-            ScenePrimitive {
-                indices: slab_indices,
-                vertices: slab_vertices,
-                index_count: slab_mesh.indices.len() as u32,
-                vertex_count: slab_mesh.vertices.len() as u32,
-                material: slab_material.device_address,
-            },
-            ScenePrimitive {
-                indices: rail_indices,
-                vertices: rail_vertices,
-                index_count: rail_mesh.indices.len() as u32,
-                vertex_count: rail_mesh.vertices.len() as u32,
-                material: rail_material.device_address,
-            },
-            ScenePrimitive {
-                indices: service_walkway_indices,
-                vertices: service_walkway_vertices,
-                index_count: service_walkway_mesh.indices.len() as u32,
-                vertex_count: service_walkway_mesh.vertices.len() as u32,
-                material: concrete_material.device_address,
-            },
-        ];
+        // Generate the cable tray
+        let cable_tray_mesh = generate_cable_tray(&track, 0.0, TRACK_LENGTH_METRES);
+        let cable_tray = create_scene_primitive(
+            renderer,
+            &mut vertex_buffer,
+            &mut index_buffer,
+            cable_tray_mesh,
+            glam::vec4(0.42, 0.43, 0.41, 1.0),
+        );
+
+        // Gather our scene primitives
+        let scene_primitives = vec![tunnel, slab_bed, rails, service_walkway, cable_tray];
 
         // Append the data to our primitive buffer
         let primitive_data: Vec<Primitive> = scene_primitives
@@ -540,25 +473,15 @@ impl SceneData {
             .collect();
         primitive_buffer.append(&primitive_data, &mut renderer.allocator);
 
-        // Create the scene instances
-        let scene_instances = vec![
-            SceneInstance {
-                primitive_index: 0,
+        // One of each, please.
+        let scene_instances = primitive_data
+            .iter()
+            .enumerate()
+            .map(|(i, _)| SceneInstance {
+                primitive_index: i,
                 world_from_local: glam::Affine3A::default(),
-            },
-            SceneInstance {
-                primitive_index: 1,
-                world_from_local: glam::Affine3A::default(),
-            },
-            SceneInstance {
-                primitive_index: 2,
-                world_from_local: glam::Affine3A::default(),
-            },
-            SceneInstance {
-                primitive_index: 3,
-                world_from_local: glam::Affine3A::default(),
-            },
-        ];
+            })
+            .collect::<Vec<_>>();
 
         // Create the instance buffer
         let instance_buffer = renderer
@@ -576,6 +499,43 @@ impl SceneData {
             scene_primitives,
             scene_instances,
         }
+    }
+}
+
+fn create_scene_primitive(
+    renderer: &mut lazy_vulkan::Renderer<RenderStateFamily>,
+    vertex_buffer: &mut BufferAllocation<lazy_vulkan_gltf::Vertex>,
+    index_buffer: &mut BufferAllocation<u32>,
+    mesh: mesh_generation::GeneratedMesh,
+    base_colour_factor: glam::Vec4,
+) -> ScenePrimitive {
+    // Upload mesh to buffer
+    let tunnel_indices = index_buffer.tip_address();
+    index_buffer.append(&mesh.indices, &mut renderer.allocator);
+    let tunnel_vertices = vertex_buffer.tip_address();
+    vertex_buffer.append(&mesh.vertices, &mut renderer.allocator);
+
+    let no_texture: TextureID = NO_TEXTURE.into();
+
+    // Create a simple grey concrete material
+    let material = renderer
+        .allocator
+        .upload_to_slab(&[lazy_vulkan_gltf::GPUMaterial {
+            base_colour_factor,
+            emissive_colour_factor: glam::Vec3::ZERO,
+
+            base_colour_texture: no_texture,
+            normal_texture: no_texture,
+            metallic_roughness_texture: no_texture,
+            ao_texture: no_texture,
+        }]);
+
+    ScenePrimitive {
+        indices: tunnel_indices,
+        vertices: tunnel_vertices,
+        index_count: mesh.indices.len() as u32,
+        vertex_count: mesh.vertices.len() as u32,
+        material: material.device_address,
     }
 }
 
@@ -1044,9 +1004,9 @@ fn camera_view_from_train_frame(train_frame: TrackFrame, demo_state: &DemoState)
     let t = demo_state.elapsed_s;
 
     // A bit of cab-space motion
-    let sway_x_m = (t * 1.7).sin() * speed_fraction * 0.35;
-    let bob_y_m = (t * 4.2).sin() * speed_fraction * 0.12;
-    let nod_y_m = (t * 3.1).sin() * speed_fraction * 0.25;
+    let sway_x_m = (t * 1.7).sin() * speed_fraction * 0.065;
+    let bob_y_m = (t * 4.2).sin() * speed_fraction * 0.022;
+    let nod_y_m = (t * 3.1).sin() * speed_fraction * 0.045;
 
     let camera_in_track = glam::vec3(sway_x_m, 1.55 + bob_y_m + nod_y_m, -1.5);
     let look_target_in_track = glam::vec3(sway_x_m * 0.35, 1.35 + bob_y_m + nod_y_m, 30.0);

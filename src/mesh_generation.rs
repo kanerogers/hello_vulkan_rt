@@ -1,7 +1,7 @@
 use crate::track::Track;
 use lazy_vulkan_gltf::Vertex;
 
-pub struct TunnelMesh {
+pub struct GeneratedMesh {
     pub vertices: Vec<Vertex>,
     pub indices: Vec<u32>,
 }
@@ -29,7 +29,7 @@ pub fn generate_tunnel_shell(
     start_s_m: f32,
     length_m: f32,
     params: TunnelMeshParams,
-) -> TunnelMesh {
+) -> GeneratedMesh {
     let ring_count = (length_m / params.ring_spacing_m).ceil() as usize + 1;
     let profile_count = params.profile_segments + 1;
 
@@ -80,10 +80,10 @@ pub fn generate_tunnel_shell(
         }
     }
 
-    TunnelMesh { vertices, indices }
+    GeneratedMesh { vertices, indices }
 }
 
-pub fn generate_slab_bed(track: &Track, start_s_m: f32, length_m: f32) -> TunnelMesh {
+pub fn generate_slab_bed(track: &Track, start_s_m: f32, length_m: f32) -> GeneratedMesh {
     let ring_spacing_m = 2.0;
     let half_width_m = 1.75;
     let slab_y_m = -1.08;
@@ -116,10 +116,10 @@ pub fn generate_slab_bed(track: &Track, start_s_m: f32, length_m: f32) -> Tunnel
         indices.extend_from_slice(&[a, c, b, b, c, d]);
     }
 
-    TunnelMesh { vertices, indices }
+    GeneratedMesh { vertices, indices }
 }
 
-pub fn generate_rails(track: &Track, start_s_m: f32, length_m: f32) -> TunnelMesh {
+pub fn generate_rails(track: &Track, start_s_m: f32, length_m: f32) -> GeneratedMesh {
     let ring_spacing_m = 1.0;
     let rail_gauge_m = 1.435;
     let rail_half_width_m = 0.055;
@@ -174,10 +174,10 @@ pub fn generate_rails(track: &Track, start_s_m: f32, length_m: f32) -> TunnelMes
         }
     }
 
-    TunnelMesh { vertices, indices }
+    GeneratedMesh { vertices, indices }
 }
 
-pub fn generate_service_walkway(track: &Track, start_s_m: f32, length_m: f32) -> TunnelMesh {
+pub fn generate_service_walkway(track: &Track, start_s_m: f32, length_m: f32) -> GeneratedMesh {
     let ring_spacing_m = 2.0;
 
     // Right side of tunnel, in track space.
@@ -227,7 +227,59 @@ pub fn generate_service_walkway(track: &Track, start_s_m: f32, length_m: f32) ->
         }
     }
 
-    TunnelMesh { vertices, indices }
+    GeneratedMesh { vertices, indices }
+}
+
+pub fn generate_cable_tray(track: &Track, start_s_m: f32, length_m: f32) -> GeneratedMesh {
+    let ring_spacing_m = 2.0;
+
+    let center_x_m = 3.15;
+    let center_y_m = 0.55;
+    let half_width_m = 0.22;
+    let half_height_m = 0.08;
+
+    let ring_count = (length_m / ring_spacing_m).ceil() as usize + 1;
+    let verts_per_ring = 4;
+
+    let mut vertices = Vec::with_capacity(ring_count * verts_per_ring);
+    let mut indices = Vec::new();
+
+    for ring_index in 0..ring_count {
+        let ring_t = ring_index as f32 / (ring_count - 1) as f32;
+        let s_m = start_s_m + ring_t * length_m;
+        let frame = track.sample(s_m);
+
+        let corners = [
+            (-half_width_m, -half_height_m, -frame.right),
+            (half_width_m, -half_height_m, -frame.up),
+            (half_width_m, half_height_m, frame.right),
+            (-half_width_m, half_height_m, frame.up),
+        ];
+
+        for (corner_index, (dx_m, dy_m, normal)) in corners.into_iter().enumerate() {
+            let position =
+                frame.origin + frame.right * (center_x_m + dx_m) + frame.up * (center_y_m + dy_m);
+
+            let uv = glam::vec2(corner_index as f32, s_m);
+            vertices.push(Vertex::new(position, normal, Some(uv)));
+        }
+    }
+
+    for ring_index in 0..(ring_count - 1) {
+        let base0 = (ring_index * verts_per_ring) as u32;
+        let base1 = base0 + verts_per_ring as u32;
+
+        for (a, b) in [(0, 1), (1, 2), (2, 3), (3, 0)] {
+            let v0 = base0 + a;
+            let v1 = base0 + b;
+            let v2 = base1 + a;
+            let v3 = base1 + b;
+
+            indices.extend_from_slice(&[v0, v2, v1, v1, v2, v3]);
+        }
+    }
+
+    GeneratedMesh { vertices, indices }
 }
 
 fn lerp(a: f32, b: f32, t: f32) -> f32 {
@@ -238,7 +290,11 @@ fn lerp(a: f32, b: f32, t: f32) -> f32 {
 mod tests {
     use super::*;
 
-    fn max_shared_ring_error(a: &TunnelMesh, b: &TunnelMesh, ring_vertex_count: usize) -> f32 {
+    fn max_shared_ring_error(
+        a: &GeneratedMesh,
+        b: &GeneratedMesh,
+        ring_vertex_count: usize,
+    ) -> f32 {
         let last_a = a.vertices.len() - ring_vertex_count;
 
         let mut max_error_m: f32 = 0.0;
@@ -320,6 +376,26 @@ mod tests {
 
         assert_eq!(mesh.vertices.len(), 44);
         assert_eq!(mesh.indices.len(), 180);
+        assert_eq!(mesh.indices.len() % 3, 0);
+    }
+
+    #[test]
+    fn cable_tray_chunks_share_exact_seam_vertices() {
+        let track = Track::metro_loop();
+
+        let a = generate_cable_tray(&track, 1_190.0, 20.0);
+        let b = generate_cable_tray(&track, 1_210.0, 20.0);
+
+        assert!(max_shared_ring_error(&a, &b, 4) < 0.0001);
+    }
+
+    #[test]
+    fn cable_tray_has_expected_topology() {
+        let track = Track::metro_loop();
+        let mesh = generate_cable_tray(&track, 0.0, 20.0);
+
+        assert_eq!(mesh.vertices.len(), 44);
+        assert_eq!(mesh.indices.len(), 240);
         assert_eq!(mesh.indices.len() % 3, 0);
     }
 }
