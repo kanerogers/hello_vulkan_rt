@@ -261,16 +261,20 @@ impl<'a> SubRenderer<'a> for RTRenderer {
             );
 
             let aspect_ratio = drawable.extent.width as f32 / drawable.extent.height as f32;
-            let mut perspective =
-                glam::Mat4::perspective_rh(60_f32.to_radians(), aspect_ratio, 0.01, 10000.0);
+            let mut perspective = glam::Mat4::perspective_infinite_reverse_rh(
+                60_f32.to_radians(),
+                aspect_ratio,
+                0.01,
+            );
 
             // wulkankjzk
             perspective.y_axis *= -1.0;
 
-            let view = camera_view_from_train_frame(state.train_current_frame, state.demo_state);
+            let view_inverse =
+                camera_view_from_train_frame(state.train_current_frame, state.demo_state);
 
             let registers = Registers {
-                view_inverse: view.inverse(),
+                view_inverse: view_inverse,
                 proj_inverse: perspective.inverse(),
                 primitive_buffer: scene_data.primitive_buffer.device_address,
                 frame: 0, // TODO
@@ -1058,7 +1062,22 @@ fn camera_view_from_train_frame(train_frame: TrackFrame, demo_state: &DemoState)
 
     let target_world = track_offset_to_world(look_target_in_track);
 
-    glam::Mat4::look_at_rh(eye_world, target_world, train_frame.up)
+    let camera_forward = (target_world - eye_world).normalize();
+    let camera_right = train_frame.up.cross(camera_forward).normalize();
+    let camera_up = camera_forward.cross(camera_right).normalize();
+
+    // This maps raygen camera space to world space:
+    // local +X -> train/image right
+    // local +Y -> train/image up
+    // local -Z -> train forward
+    let world_from_camera = glam::Mat4::from_cols(
+        camera_right.extend(0.0),
+        camera_up.extend(0.0),
+        (-camera_forward).extend(0.0),
+        eye_world.extend(1.0),
+    );
+
+    world_from_camera
 }
 
 pub fn glam_to_khr(transform: glam::Affine3A) -> vk::TransformMatrixKHR {
