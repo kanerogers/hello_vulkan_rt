@@ -11,8 +11,8 @@ use crate::{
     demo_state::{DemoState, TRACK_LENGTH_METRES},
     graphics::{RenderState, RenderStateFamily},
     mesh_generation::{
-        self, generate_cable_tray, generate_rails, generate_service_walkway, generate_slab_bed,
-        generate_tunnel_shell,
+        self, generate_cable_tray, generate_led_tubes, generate_rails, generate_service_walkway,
+        generate_slab_bed, generate_tunnel_shell,
     },
     track::{Track, TrackFrame},
 };
@@ -448,8 +448,25 @@ impl SceneData {
             glam::vec4(0.42, 0.43, 0.41, 1.0),
         );
 
+        // Generate the LED tubes
+        let led_tube_mesh = generate_led_tubes(track, 0.0, TRACK_LENGTH_METRES);
+        let led_tubes = create_scene_primitive(
+            renderer,
+            &mut vertex_buffer,
+            &mut index_buffer,
+            led_tube_mesh,
+            glam::vec4(0.82, 0.90, 1.0, 1.0),
+        );
+
         // Gather our scene primitives
-        let scene_primitives = vec![tunnel, slab_bed, rails, service_walkway, cable_tray];
+        let scene_primitives = vec![
+            tunnel,
+            slab_bed,
+            rails,
+            service_walkway,
+            cable_tray,
+            led_tubes,
+        ];
 
         // Append the data to our primitive buffer
         let primitive_data: Vec<Primitive> = scene_primitives

@@ -282,6 +282,67 @@ pub fn generate_cable_tray(track: &Track, start_s_m: f32, length_m: f32) -> Gene
     GeneratedMesh { vertices, indices }
 }
 
+pub fn generate_led_tubes(track: &Track, start_s_m: f32, length_m: f32) -> GeneratedMesh {
+    let spacing_m = 12.0;
+    let tube_length_m = 4.0;
+
+    let center_x_m = 0.0;
+    let center_y_m = 3.52;
+    let half_width_m = 0.09;
+    let half_height_m = 0.035;
+
+    let fixture_count = (length_m / spacing_m).floor() as usize;
+
+    let mut vertices = Vec::with_capacity(fixture_count * 8);
+    let mut indices = Vec::with_capacity(fixture_count * 24);
+
+    for fixture_index in 0..fixture_count {
+        let fixture_start_s_m = start_s_m + fixture_index as f32 * spacing_m;
+        let fixture_end_s_m = fixture_start_s_m + tube_length_m;
+
+        let frame0 = track.sample(fixture_start_s_m);
+        let frame1 = track.sample(fixture_end_s_m);
+
+        let base = vertices.len() as u32;
+
+        let corners = [
+            (-half_width_m, -half_height_m),
+            (half_width_m, -half_height_m),
+            (half_width_m, half_height_m),
+            (-half_width_m, half_height_m),
+        ];
+
+        for frame in [frame0, frame1] {
+            for (corner_index, (dx_m, dy_m)) in corners.into_iter().enumerate() {
+                let position = frame.origin
+                    + frame.right * (center_x_m + dx_m)
+                    + frame.up * (center_y_m + dy_m);
+
+                let normal = match corner_index {
+                    0 => (-frame.right - frame.up).normalize(),
+                    1 => (frame.right - frame.up).normalize(),
+                    2 => (frame.right + frame.up).normalize(),
+                    _ => (-frame.right + frame.up).normalize(),
+                };
+
+                let uv = glam::vec2(corner_index as f32, fixture_start_s_m);
+                vertices.push(Vertex::new(position, normal, Some(uv)));
+            }
+        }
+
+        for (a, b) in [(0, 1), (1, 2), (2, 3), (3, 0)] {
+            let v0 = base + a;
+            let v1 = base + b;
+            let v2 = base + 4 + a;
+            let v3 = base + 4 + b;
+
+            indices.extend_from_slice(&[v0, v2, v1, v1, v2, v3]);
+        }
+    }
+
+    GeneratedMesh { vertices, indices }
+}
+
 fn lerp(a: f32, b: f32, t: f32) -> f32 {
     a + (b - a) * t
 }
