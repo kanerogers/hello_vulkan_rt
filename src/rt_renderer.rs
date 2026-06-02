@@ -25,11 +25,6 @@ pub struct RTRenderer {
     image: lazy_vulkan::Image,
     state: Option<RTState>,
     #[allow(unused)]
-    vertex_buffer: BufferAllocation<lazy_vulkan_gltf::Vertex>,
-    #[allow(unused)]
-    index_buffer: BufferAllocation<u32>,
-    primitive_buffer: BufferAllocation<Primitive>,
-    instance_buffer: BufferAllocation<vk::AccelerationStructureInstanceKHR>,
     pipeline: vk::Pipeline,
     pipeline_layout: vk::PipelineLayout,
     tonemapping_pipeline: lazy_vulkan::Pipeline,
@@ -37,12 +32,12 @@ pub struct RTRenderer {
     #[allow(unused)]
     descriptor_pool: vk::DescriptorPool,
     descriptor_set: vk::DescriptorSet,
-    scene_primitives: Vec<ScenePrimitive>,
-    scene_instances: Vec<SceneInstance>,
+    scene_data: SceneData,
 }
 
 impl RTRenderer {
     pub fn new(renderer: &mut lazy_vulkan::Renderer<RenderStateFamily>, track: &Track) -> Self {
+        // Create our backing image
         let extent = renderer.get_drawable_extent();
         let image = renderer.create_image(
             "RT Target",
@@ -54,99 +49,8 @@ impl RTRenderer {
                 | vk::ImageUsageFlags::SAMPLED,
         );
 
-        let mut vertex_buffer = renderer.allocator.allocate_buffer(
-            10 * 1024 * 1024,
-            vk::BufferUsageFlags::ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_KHR
-                | vk::BufferUsageFlags::STORAGE_BUFFER,
-        );
-
-        let mut index_buffer = renderer.allocator.allocate_buffer(
-            1024 * 1024,
-            vk::BufferUsageFlags::ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_KHR
-                | vk::BufferUsageFlags::STORAGE_BUFFER,
-        );
-
-        let tunnel_mesh =
-            generate_tunnel_shell(track, 0.0, TRACK_LENGTH_METRES, Default::default());
-
-        log::info!(
-            "Generated tunnel mesh: vertices={} indices={}",
-            tunnel_mesh.vertices.len(),
-            tunnel_mesh.indices.len()
-        );
-
-        let mut primitive_buffer = renderer
-            .allocator
-            .allocate_buffer(10 * 1024 * 1024, vk::BufferUsageFlags::STORAGE_BUFFER);
-
-        let no_texture: TextureID = NO_TEXTURE.into();
-
-        // Create a simple grey concrete material
-        let tunnel_material = renderer
-            .allocator
-            .upload_to_slab(&[lazy_vulkan_gltf::GPUMaterial {
-                base_colour_factor: glam::vec4(0.55, 0.57, 0.56, 1.0),
-                emissive_colour_factor: glam::Vec3::ZERO,
-
-                base_colour_texture: no_texture,
-                normal_texture: no_texture,
-                metallic_roughness_texture: no_texture,
-                ao_texture: no_texture,
-            }]);
-
-        // Upload tunnel mesh to buffer
-        let tunnel_indices = index_buffer.tip_address();
-        index_buffer.append(&tunnel_mesh.indices, &mut renderer.allocator);
-
-        // Upload tunnel mesh vertices to buffer
-        let tunnel_vertices = vertex_buffer.tip_address();
-        vertex_buffer.append(&tunnel_mesh.vertices, &mut renderer.allocator);
-
-        // Create a scene primitive
-        let scene_primitives = vec![ScenePrimitive {
-            indices: tunnel_indices,
-            vertices: tunnel_vertices,
-            index_count: tunnel_mesh.indices.len() as u32,
-            vertex_count: tunnel_mesh.vertices.len() as u32,
-            material: tunnel_material.device_address,
-        }];
-
-        let scene_instances = vec![SceneInstance {
-            primitive_index: 0,
-            world_from_local: glam::Affine3A::default(),
-        }];
-
-        let primitive_data: Vec<Primitive> = scene_primitives
-            .iter()
-            .copied()
-            .map(
-                |ScenePrimitive {
-                     indices,
-                     vertices,
-                     material,
-                     index_count: _,
-                     vertex_count: _,
-                 }| {
-                    Primitive {
-                        material,
-                        index_buffer: indices,
-                        vertex_buffer: vertices,
-                    }
-                },
-            )
-            .collect();
-
-        primitive_buffer.append(&primitive_data, &mut renderer.allocator);
-
-        let instance_count = scene_instances.len();
-
-        // Create the instance buffer
-        let instance_buffer = renderer
-            .allocator
-            .allocate_buffer::<vk::AccelerationStructureInstanceKHR>(
-                instance_count,
-                vk::BufferUsageFlags::ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_KHR,
-            );
+        // Scene data
+        let scene_data = SceneData::new(renderer, track);
 
         let device = &renderer.context.device;
 
@@ -227,52 +131,13 @@ impl RTRenderer {
 
         let context = &renderer.context;
 
-        let pipeline = unsafe {
-            context
-                .ray_tracing_pipeline_pfn
-                .create_ray_tracing_pipelines(
-                    vk::DeferredOperationKHR::null(),
-                    vk::PipelineCache::null(),
-                    &[vk::RayTracingPipelineCreateInfoKHR::default()
-                        .groups(&[
-                            vk::RayTracingShaderGroupCreateInfoKHR::default()
-                                .ty(vk::RayTracingShaderGroupTypeKHR::GENERAL)
-                                .any_hit_shader(vk::SHADER_UNUSED_KHR)
-                                .closest_hit_shader(vk::SHADER_UNUSED_KHR)
-                                .intersection_shader(vk::SHADER_UNUSED_KHR)
-                                .general_shader(raygen_index),
-                            vk::RayTracingShaderGroupCreateInfoKHR::default()
-                                .ty(vk::RayTracingShaderGroupTypeKHR::GENERAL)
-                                .any_hit_shader(vk::SHADER_UNUSED_KHR)
-                                .closest_hit_shader(vk::SHADER_UNUSED_KHR)
-                                .intersection_shader(vk::SHADER_UNUSED_KHR)
-                                .general_shader(miss_index),
-                            vk::RayTracingShaderGroupCreateInfoKHR::default()
-                                .ty(vk::RayTracingShaderGroupTypeKHR::TRIANGLES_HIT_GROUP)
-                                .any_hit_shader(vk::SHADER_UNUSED_KHR)
-                                .closest_hit_shader(closest_hit_index)
-                                .intersection_shader(vk::SHADER_UNUSED_KHR)
-                                .general_shader(vk::SHADER_UNUSED_KHR),
-                        ])
-                        .stages(&[
-                            vk::PipelineShaderStageCreateInfo::default()
-                                .stage(vk::ShaderStageFlags::RAYGEN_KHR)
-                                .name(c"main")
-                                .module(lazy_vulkan::load_module(&r(RAYGEN_SHADER_PATH), context)),
-                            vk::PipelineShaderStageCreateInfo::default()
-                                .stage(vk::ShaderStageFlags::MISS_KHR)
-                                .name(c"main")
-                                .module(lazy_vulkan::load_module(&r(MISS_SHADER_PATH), context)),
-                            vk::PipelineShaderStageCreateInfo::default()
-                                .stage(vk::ShaderStageFlags::CLOSEST_HIT_KHR)
-                                .name(c"main")
-                                .module(lazy_vulkan::load_module(&r(CLOSEST_SHADER_PATH), context)),
-                        ])
-                        .layout(pipeline_layout)],
-                    None,
-                )
-        }
-        .unwrap()[0];
+        let pipeline = create_rt_pipeline(
+            pipeline_layout,
+            raygen_index,
+            miss_index,
+            closest_hit_index,
+            context,
+        );
 
         let tonemapping_pipeline = renderer.create_pipeline_with_options::<TonemappingRegisters>(
             &r(FULLSCREEN_SHADER_PATH),
@@ -287,324 +152,41 @@ impl RTRenderer {
             context: renderer.context.clone(),
             state: None,
             image,
-            vertex_buffer,
-            index_buffer,
-            primitive_buffer,
-            instance_buffer,
             descriptor_pool,
             descriptor_set,
             pipeline,
             pipeline_layout,
             tonemapping_pipeline,
             tonemapping_descriptor_set: renderer.descriptors.set,
-            scene_primitives,
-            scene_instances,
+            scene_data,
         }
     }
+}
 
-    fn create_rt_state(&mut self, allocator: &mut lazy_vulkan::Allocator) -> RTState {
-        let command_buffer = self.context.draw_command_buffer;
+impl<'a> SubRenderer<'a> for RTRenderer {
+    type State = RenderState<'a>;
 
-        // (TODO): This is kinda yuck.
-        //
-        // Solutions:
-        // 1) `append_now(command_buffer)` <-- does what it says on the tin
-        // 2) `on_transferred` <-- add a functor to be called when the transfer has been recorded
-        // 3) `Buffer.flush(command_buffer` / `allocator.flush_buffer(buffer, command_buffer)` <-- executes just the transfers for this buffer
-        allocator.execute_transfers(command_buffer);
-
-        // First, build up our primitive buffer
-        let mut primitive_blas = Vec::with_capacity(self.scene_primitives.len());
-
-        for primitive in &self.scene_primitives {
-            let primitive_count = primitive.index_count / 3;
-            let geometries = &[vk::AccelerationStructureGeometryKHR::default()
-                .geometry(vk::AccelerationStructureGeometryDataKHR {
-                    triangles: vk::AccelerationStructureGeometryTrianglesDataKHR::default()
-                        .index_data(vk::DeviceOrHostAddressConstKHR {
-                            device_address: primitive.indices,
-                        })
-                        .index_type(vk::IndexType::UINT32)
-                        .vertex_format(vk::Format::R32G32B32_SFLOAT)
-                        .vertex_data(vk::DeviceOrHostAddressConstKHR {
-                            device_address: primitive.vertices,
-                        })
-                        .vertex_stride(std::mem::size_of::<lazy_vulkan_gltf::Vertex>() as _)
-                        .max_vertex(primitive.vertex_count - 1),
-                })
-                .geometry_type(vk::GeometryTypeKHR::TRIANGLES)
-                .flags(vk::GeometryFlagsKHR::NO_DUPLICATE_ANY_HIT_INVOCATION)];
-
-            let build_geometry_info = vk::AccelerationStructureBuildGeometryInfoKHR::default()
-                .ty(vk::AccelerationStructureTypeKHR::BOTTOM_LEVEL)
-                .mode(vk::BuildAccelerationStructureModeKHR::BUILD)
-                .geometries(geometries);
-
-            let mut size_info = vk::AccelerationStructureBuildSizesInfoKHR::default();
-            unsafe {
-                self.context
-                    .acceleration_structure_pfn
-                    .get_acceleration_structure_build_sizes(
-                        vk::AccelerationStructureBuildTypeKHR::DEVICE,
-                        &build_geometry_info,
-                        &[primitive_count],
-                        &mut size_info,
-                    )
-            };
-
-            // This is essentially opaque storage used by the driver
-            let blas_storage = allocator.allocate_buffer::<u8>(
-                size_info.acceleration_structure_size as _,
-                vk::BufferUsageFlags::ACCELERATION_STRUCTURE_STORAGE_KHR,
-            );
-
-            let blas = unsafe {
-                self.context
-                    .acceleration_structure_pfn
-                    .create_acceleration_structure(
-                        &vk::AccelerationStructureCreateInfoKHR::default()
-                            .ty(vk::AccelerationStructureTypeKHR::BOTTOM_LEVEL)
-                            .buffer(blas_storage.handle)
-                            .size(size_info.acceleration_structure_size),
-                        None,
-                    )
-            }
-            .unwrap();
-
-            let scratch_buffer = allocator.allocate_buffer_with_alignment::<u8>(
-                size_info.build_scratch_size as _,
-                self.context
-                    .raytracing_properties
-                    .min_acceleration_structure_scratch_offset_alignment as u64,
-                vk::BufferUsageFlags::STORAGE_BUFFER,
-            );
-
-            let build_geometry_info = build_geometry_info
-                .dst_acceleration_structure(blas)
-                .scratch_data(vk::DeviceOrHostAddressKHR {
-                    device_address: scratch_buffer.device_address,
-                });
-
-            unsafe {
-                self.context
-                    .acceleration_structure_pfn
-                    .cmd_build_acceleration_structures(
-                        command_buffer,
-                        &[build_geometry_info],
-                        &[&[vk::AccelerationStructureBuildRangeInfoKHR::default()
-                            .primitive_count(primitive_count)]],
-                    )
-            };
-
-            // Add the BLAS to our map
-            primitive_blas.push(blas);
+    fn stage_transfers(
+        &mut self,
+        _state: &Self::State,
+        allocator: &mut lazy_vulkan::Allocator,
+        _image_manager: &mut lazy_vulkan::ImageManager,
+    ) {
+        // No need to rebuild if we already have a state
+        if self.state.is_some() {
+            return;
         }
 
-        // Next, build our instance buffer
-        for instance in &self.scene_instances {
-            let blas = primitive_blas[instance.primitive_index];
-            let blas_address = unsafe {
-                self.context
-                    .acceleration_structure_pfn
-                    .get_acceleration_structure_device_address(
-                        &vk::AccelerationStructureDeviceAddressInfoKHR::default()
-                            .acceleration_structure(blas),
-                    )
-            };
-
-            unsafe {
-                self.instance_buffer.append_unsafe(
-                    &[vk::AccelerationStructureInstanceKHR {
-                        transform: glam_to_khr(instance.world_from_local),
-
-                        // closesthit.slang reads this via InstanceIndex()
-                        instance_custom_index_and_mask: Packed24_8::new(
-                            instance.primitive_index as u32,
-                            0xFF,
-                        ),
-
-                        instance_shader_binding_table_record_offset_and_flags: Packed24_8::new(
-                            0,
-                            vk::GeometryInstanceFlagsKHR::empty().as_raw() as _,
-                        ),
-                        acceleration_structure_reference: vk::AccelerationStructureReferenceKHR {
-                            device_handle: blas_address,
-                        },
-                    }],
-                    allocator,
-                );
-            }
-        }
-
-        allocator.execute_transfers(command_buffer);
-        unsafe {
-            self.context.cmd_pipeline_barrier2(
-                command_buffer,
-                &vk::DependencyInfo::default().buffer_memory_barriers(&[
-                    vk::BufferMemoryBarrier2::default()
-                        .buffer(self.instance_buffer.handle)
-                        .src_access_mask(vk::AccessFlags2::TRANSFER_WRITE)
-                        .src_stage_mask(vk::PipelineStageFlags2::TRANSFER)
-                        .dst_access_mask(vk::AccessFlags2::ACCELERATION_STRUCTURE_WRITE_KHR)
-                        .dst_stage_mask(vk::PipelineStageFlags2::ACCELERATION_STRUCTURE_BUILD_KHR)
-                        .size(vk::WHOLE_SIZE),
-                ]),
-            )
-        };
-
-        let instance_count = self.instance_buffer.len() as u32;
-
-        let instance_geometries = &[vk::AccelerationStructureGeometryKHR::default()
-            .geometry(vk::AccelerationStructureGeometryDataKHR {
-                instances: vk::AccelerationStructureGeometryInstancesDataKHR::default()
-                    .array_of_pointers(false)
-                    .data(vk::DeviceOrHostAddressConstKHR {
-                        device_address: self.instance_buffer.device_address,
-                    }),
-            })
-            .geometry_type(vk::GeometryTypeKHR::INSTANCES)];
-
-        let build_geometry_info = vk::AccelerationStructureBuildGeometryInfoKHR::default()
-            .ty(vk::AccelerationStructureTypeKHR::TOP_LEVEL)
-            .mode(vk::BuildAccelerationStructureModeKHR::BUILD)
-            .geometries(instance_geometries);
-
-        let mut size_info = vk::AccelerationStructureBuildSizesInfoKHR::default();
-        unsafe {
-            self.context
-                .acceleration_structure_pfn
-                .get_acceleration_structure_build_sizes(
-                    vk::AccelerationStructureBuildTypeKHR::DEVICE,
-                    &build_geometry_info,
-                    &[instance_count],
-                    &mut size_info,
-                )
-        };
-
-        // This is essentially opaque storage used by the driver
-        let tlas_storage = allocator.allocate_buffer::<u8>(
-            size_info.acceleration_structure_size as _,
-            vk::BufferUsageFlags::ACCELERATION_STRUCTURE_STORAGE_KHR,
+        let rt_state = RTState::new(
+            &self.context,
+            allocator,
+            &mut self.scene_data,
+            self.pipeline,
         );
 
-        let tlas = unsafe {
-            self.context
-                .acceleration_structure_pfn
-                .create_acceleration_structure(
-                    &vk::AccelerationStructureCreateInfoKHR::default()
-                        .ty(vk::AccelerationStructureTypeKHR::TOP_LEVEL)
-                        .buffer(tlas_storage.handle)
-                        .size(size_info.acceleration_structure_size),
-                    None,
-                )
-        }
-        .unwrap();
+        let device = &self.context.device;
 
-        // This is essentially opaque storage used by the driver
-        let scratch_buffer = allocator.allocate_buffer_with_alignment::<u8>(
-            size_info.build_scratch_size as _,
-            self.context
-                .raytracing_properties
-                .min_acceleration_structure_scratch_offset_alignment as u64,
-            vk::BufferUsageFlags::STORAGE_BUFFER,
-        );
-
-        let build_geometry_info = build_geometry_info
-            .dst_acceleration_structure(tlas)
-            .scratch_data(vk::DeviceOrHostAddressKHR {
-                device_address: scratch_buffer.device_address,
-            });
-
-        unsafe {
-            self.context
-                .acceleration_structure_pfn
-                .cmd_build_acceleration_structures(
-                    command_buffer,
-                    &[build_geometry_info],
-                    &[&[vk::AccelerationStructureBuildRangeInfoKHR::default()
-                        .primitive_count(instance_count)]],
-                )
-        };
-
-        // SBT!
-        let miss_count = 1;
-        let hit_count = 1;
-        let handle_count = 1 + miss_count + hit_count;
-        let raytracing_properties = &self.context.raytracing_properties;
-        let handle_size = raytracing_properties.shader_group_handle_size;
-        let handle_size_aligned = align_up_pow2(
-            handle_size as _,
-            raytracing_properties.shader_group_handle_alignment as _,
-        );
-
-        let stride = align_up_pow2(
-            handle_size_aligned,
-            raytracing_properties.shader_group_base_alignment as _,
-        );
-        let mut gen_region = vk::StridedDeviceAddressRegionKHR::default()
-            .stride(stride)
-            .size(stride);
-
-        let mut miss_region = vk::StridedDeviceAddressRegionKHR::default()
-            .stride(handle_size_aligned)
-            .size(align_up_pow2(
-                miss_count * handle_size_aligned,
-                raytracing_properties.shader_group_base_alignment as u64,
-            ));
-
-        let mut hit_region = vk::StridedDeviceAddressRegionKHR::default()
-            .stride(handle_size_aligned)
-            .size(align_up_pow2(
-                hit_count * handle_size_aligned,
-                raytracing_properties.shader_group_base_alignment as u64,
-            ));
-
-        let call_region = vk::StridedDeviceAddressRegionKHR::default();
-
-        let data_size = handle_count * (handle_size as u64);
-
-        let handles = unsafe {
-            self.context
-                .ray_tracing_pipeline_pfn
-                .get_ray_tracing_shader_group_handles(
-                    self.pipeline,
-                    0,
-                    handle_count as u32,
-                    data_size as usize,
-                )
-        }
-        .unwrap();
-
-        // Copy data
-        let sbt_size = gen_region.size + miss_region.size + hit_region.size + call_region.size;
-        let mut sbt_data = vec![0; sbt_size as usize];
-
-        let mut offset = 0;
-        sbt_data[offset..handle_size as usize].copy_from_slice(&handles[..handle_size as usize]);
-        offset += gen_region.size as usize;
-        sbt_data[offset..offset + handle_size as usize]
-            .copy_from_slice(&handles[handle_size as usize..(handle_size as usize) * 2]);
-
-        offset += miss_region.size as usize;
-        sbt_data[offset..offset + handle_size as usize]
-            .copy_from_slice(&handles[(handle_size as usize * 2)..(handle_size as usize) * 3]);
-
-        let mut sbt_buffer = allocator.allocate_buffer::<u8>(
-            sbt_size as usize,
-            vk::BufferUsageFlags::TRANSFER_SRC | vk::BufferUsageFlags::SHADER_BINDING_TABLE_KHR,
-        );
-
-        sbt_buffer.append(&sbt_data, allocator);
-
-        gen_region.device_address = sbt_buffer.device_address;
-        miss_region.device_address = gen_region.device_address + gen_region.size;
-        hit_region.device_address = gen_region.device_address + gen_region.size + miss_region.size;
-
-        allocator.execute_transfers(command_buffer);
-
-        let context = &self.context;
-        let device = &context.device;
-
+        // Update our descriptor sets
         unsafe {
             device.update_descriptor_sets(
                 &[
@@ -615,7 +197,7 @@ impl RTRenderer {
                         .descriptor_count(1)
                         .push_next(
                             &mut vk::WriteDescriptorSetAccelerationStructureKHR::default()
-                                .acceleration_structures(&[tlas]),
+                                .acceleration_structures(&[rt_state.tlas]),
                         ),
                     vk::WriteDescriptorSet::default()
                         .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
@@ -630,31 +212,7 @@ impl RTRenderer {
             )
         };
 
-        let rtstate = RTState {
-            tlas,
-            gen_region,
-            miss_region,
-            hit_region,
-            call_region,
-        };
-        rtstate
-    }
-}
-
-impl<'a> SubRenderer<'a> for RTRenderer {
-    type State = RenderState<'a>;
-
-    fn stage_transfers(
-        &mut self,
-        _state: &Self::State,
-        allocator: &mut lazy_vulkan::Allocator,
-        _image_manager: &mut lazy_vulkan::ImageManager,
-    ) {
-        if self.state.is_some() {
-            return;
-        }
-
-        self.state = Some(self.create_rt_state(allocator));
+        self.state = Some(rt_state);
     }
 
     fn draw_layer(
@@ -669,6 +227,7 @@ impl<'a> SubRenderer<'a> for RTRenderer {
         let device = &context.device;
         let command_buffer = context.draw_command_buffer;
         let drawable = &layer_info.colour_attachment.unwrap();
+        let scene_data = &self.scene_data;
 
         unsafe {
             device.cmd_bind_pipeline(
@@ -713,7 +272,7 @@ impl<'a> SubRenderer<'a> for RTRenderer {
             let registers = Registers {
                 view_inverse: view.inverse(),
                 proj_inverse: perspective.inverse(),
-                primitive_buffer: self.primitive_buffer.device_address,
+                primitive_buffer: scene_data.primitive_buffer.device_address,
                 frame: 0, // TODO
             };
 
@@ -727,10 +286,10 @@ impl<'a> SubRenderer<'a> for RTRenderer {
 
             context.ray_tracing_pipeline_pfn.cmd_trace_rays(
                 command_buffer,
-                &rt_state.gen_region,
-                &rt_state.miss_region,
-                &rt_state.hit_region,
-                &rt_state.call_region,
+                &rt_state.sbt.gen_region,
+                &rt_state.sbt.miss_region,
+                &rt_state.sbt.hit_region,
+                &rt_state.sbt.call_region,
                 drawable.extent.width,
                 drawable.extent.height,
                 1,
@@ -791,45 +350,131 @@ impl<'a> SubRenderer<'a> for RTRenderer {
             );
             device.cmd_draw(command_buffer, 3, 1, 0, 0);
             device.cmd_end_rendering(command_buffer);
-
-            // context.device.cmd_blit_image(
-            //     command_buffer,
-            //     self.image.handle,
-            //     vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
-            //     drawable.image,
-            //     vk::ImageLayout::TRANSFER_DST_OPTIMAL,
-            //     &[vk::ImageBlit::default()
-            //         .src_offsets([
-            //             vk::Offset3D::default(),
-            //             vk::Offset3D::default()
-            //                 .x(drawable.extent.width as i32)
-            //                 .y(drawable.extent.height as i32)
-            //                 .z(1),
-            //         ])
-            //         .src_subresource(
-            //             vk::ImageSubresourceLayers::default()
-            //                 .aspect_mask(vk::ImageAspectFlags::COLOR)
-            //                 .layer_count(1),
-            //         )
-            //         .dst_offsets([
-            //             vk::Offset3D::default(),
-            //             vk::Offset3D::default()
-            //                 .x(drawable.extent.width as i32)
-            //                 .y(drawable.extent.height as i32)
-            //                 .z(1),
-            //         ])
-            //         .dst_subresource(
-            //             vk::ImageSubresourceLayers::default()
-            //                 .aspect_mask(vk::ImageAspectFlags::COLOR)
-            //                 .layer_count(1),
-            //         )],
-            //     vk::Filter::LINEAR,
-            // );
         };
     }
 
     fn label(&self) -> &'static str {
         "RT Renderer"
+    }
+}
+
+/// This is a wrapper around all our scene-specific data.
+pub struct SceneData {
+    #[allow(unused)]
+    vertex_buffer: BufferAllocation<lazy_vulkan_gltf::Vertex>,
+    #[allow(unused)]
+    index_buffer: BufferAllocation<u32>,
+    primitive_buffer: BufferAllocation<Primitive>,
+    instance_buffer: BufferAllocation<vk::AccelerationStructureInstanceKHR>,
+    scene_primitives: Vec<ScenePrimitive>,
+    scene_instances: Vec<SceneInstance>,
+}
+
+impl SceneData {
+    pub fn new(renderer: &mut lazy_vulkan::Renderer<RenderStateFamily>, track: &Track) -> Self {
+        // Create our buffers
+        let mut vertex_buffer = renderer.allocator.allocate_buffer(
+            10 * 1024 * 1024,
+            vk::BufferUsageFlags::ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_KHR
+                | vk::BufferUsageFlags::STORAGE_BUFFER,
+        );
+
+        let mut index_buffer = renderer.allocator.allocate_buffer(
+            1024 * 1024,
+            vk::BufferUsageFlags::ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_KHR
+                | vk::BufferUsageFlags::STORAGE_BUFFER,
+        );
+
+        let mut primitive_buffer = renderer
+            .allocator
+            .allocate_buffer(10 * 1024 * 1024, vk::BufferUsageFlags::STORAGE_BUFFER);
+
+        // Create the tunnel mesh
+        let tunnel_mesh =
+            generate_tunnel_shell(track, 0.0, TRACK_LENGTH_METRES, Default::default());
+
+        log::info!(
+            "Generated tunnel mesh: vertices={} indices={}",
+            tunnel_mesh.vertices.len(),
+            tunnel_mesh.indices.len()
+        );
+
+        let no_texture: TextureID = NO_TEXTURE.into();
+
+        // Create a simple grey concrete material
+        let tunnel_material = renderer
+            .allocator
+            .upload_to_slab(&[lazy_vulkan_gltf::GPUMaterial {
+                base_colour_factor: glam::vec4(0.55, 0.57, 0.56, 1.0),
+                emissive_colour_factor: glam::Vec3::ZERO,
+
+                base_colour_texture: no_texture,
+                normal_texture: no_texture,
+                metallic_roughness_texture: no_texture,
+                ao_texture: no_texture,
+            }]);
+
+        // Upload tunnel mesh to buffer
+        let tunnel_indices = index_buffer.tip_address();
+        index_buffer.append(&tunnel_mesh.indices, &mut renderer.allocator);
+
+        // Upload tunnel mesh vertices to buffer
+        let tunnel_vertices = vertex_buffer.tip_address();
+        vertex_buffer.append(&tunnel_mesh.vertices, &mut renderer.allocator);
+
+        // Create a scene primitive
+        let scene_primitives = vec![ScenePrimitive {
+            indices: tunnel_indices,
+            vertices: tunnel_vertices,
+            index_count: tunnel_mesh.indices.len() as u32,
+            vertex_count: tunnel_mesh.vertices.len() as u32,
+            material: tunnel_material.device_address,
+        }];
+
+        // Append the data to our primitive buffer
+        let primitive_data: Vec<Primitive> = scene_primitives
+            .iter()
+            .copied()
+            .map(
+                |ScenePrimitive {
+                     indices,
+                     vertices,
+                     material,
+                     index_count: _,
+                     vertex_count: _,
+                 }| {
+                    Primitive {
+                        material,
+                        index_buffer: indices,
+                        vertex_buffer: vertices,
+                    }
+                },
+            )
+            .collect();
+        primitive_buffer.append(&primitive_data, &mut renderer.allocator);
+
+        // Create the scene instances
+        let scene_instances = vec![SceneInstance {
+            primitive_index: 0,
+            world_from_local: glam::Affine3A::default(),
+        }];
+
+        // Create the instance buffer
+        let instance_buffer = renderer
+            .allocator
+            .allocate_buffer::<vk::AccelerationStructureInstanceKHR>(
+                scene_instances.len(),
+                vk::BufferUsageFlags::ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_KHR,
+            );
+
+        Self {
+            vertex_buffer,
+            index_buffer,
+            primitive_buffer,
+            instance_buffer,
+            scene_primitives,
+            scene_instances,
+        }
     }
 }
 
@@ -873,10 +518,387 @@ struct SceneInstance {
 pub struct RTState {
     #[allow(unused)]
     tlas: vk::AccelerationStructureKHR,
+    sbt: SBT,
+}
+
+impl RTState {
+    pub fn new(
+        context: &lazy_vulkan::Context,
+        allocator: &mut lazy_vulkan::Allocator,
+        scene_data: &mut SceneData,
+        pipeline: vk::Pipeline,
+    ) -> Self {
+        let command_buffer = context.draw_command_buffer;
+
+        // Flush any transfers.
+        // (TODO): This is kinda yuck.
+        //
+        // Solutions:
+        // 1) `append_now(command_buffer)` <-- does what it says on the tin
+        // 2) `on_transferred` <-- add a functor to be called when the transfer has been recorded
+        // 3) `Buffer.flush(command_buffer` / `allocator.flush_buffer(buffer, command_buffer)` <-- executes just the transfers for this buffer
+        allocator.execute_transfers(command_buffer);
+
+        // First, build up our primitive buffer
+        // We start with a map between primitive indices and BLAS indices
+        let mut primitive_blas = Vec::with_capacity(scene_data.scene_primitives.len());
+
+        // Then we iterate through the scene primitives and build the BLAS for each one
+        for primitive in &scene_data.scene_primitives {
+            // Build the BLAS for this primitive
+            let blas = build_blas(context, allocator, command_buffer, primitive);
+
+            // Add it to our map
+            primitive_blas.push(blas);
+        }
+
+        // Next, build our instance buffer
+        for instance in &scene_data.scene_instances {
+            // Create an instance for this.. instance.
+            create_instance(
+                context,
+                allocator,
+                &mut scene_data.instance_buffer,
+                &primitive_blas,
+                instance,
+            );
+        }
+
+        // Now, excecute those transfers
+        allocator.execute_transfers(command_buffer);
+
+        // Issue a barrier to make sure the data is visible to the acceleration structure
+        unsafe {
+            context.cmd_pipeline_barrier2(
+                command_buffer,
+                &vk::DependencyInfo::default().buffer_memory_barriers(&[
+                    vk::BufferMemoryBarrier2::default()
+                        .buffer(scene_data.instance_buffer.handle)
+                        .src_access_mask(vk::AccessFlags2::TRANSFER_WRITE)
+                        .src_stage_mask(vk::PipelineStageFlags2::TRANSFER)
+                        .dst_access_mask(vk::AccessFlags2::ACCELERATION_STRUCTURE_WRITE_KHR)
+                        .dst_stage_mask(vk::PipelineStageFlags2::ACCELERATION_STRUCTURE_BUILD_KHR)
+                        .size(vk::WHOLE_SIZE),
+                ]),
+            )
+        };
+
+        // Now, build the TLAS using the BLASes and instances we generated.
+        let tlas = build_tlas(context, allocator, scene_data, command_buffer);
+
+        // Build the SBT
+        let sbt = SBT::new(context, allocator, pipeline);
+
+        // Finally, execute the transfer command buffer to upload the SBT data to the GPU
+        allocator.execute_transfers(command_buffer);
+
+        RTState { tlas, sbt }
+    }
+}
+
+fn create_instance(
+    context: &lazy_vulkan::Context,
+    allocator: &mut lazy_vulkan::Allocator,
+    instance_buffer: &mut BufferAllocation<vk::AccelerationStructureInstanceKHR>,
+    primitive_blas: &Vec<vk::AccelerationStructureKHR>,
+    instance: &SceneInstance,
+) {
+    let blas = primitive_blas[instance.primitive_index];
+    let blas_address = unsafe {
+        context
+            .acceleration_structure_pfn
+            .get_acceleration_structure_device_address(
+                &vk::AccelerationStructureDeviceAddressInfoKHR::default()
+                    .acceleration_structure(blas),
+            )
+    };
+
+    unsafe {
+        instance_buffer.append_unsafe(
+            &[vk::AccelerationStructureInstanceKHR {
+                transform: glam_to_khr(instance.world_from_local),
+
+                // closesthit.slang reads this via InstanceIndex()
+                instance_custom_index_and_mask: Packed24_8::new(
+                    instance.primitive_index as u32,
+                    0xFF,
+                ),
+
+                instance_shader_binding_table_record_offset_and_flags: Packed24_8::new(
+                    0,
+                    vk::GeometryInstanceFlagsKHR::empty().as_raw() as _,
+                ),
+                acceleration_structure_reference: vk::AccelerationStructureReferenceKHR {
+                    device_handle: blas_address,
+                },
+            }],
+            allocator,
+        );
+    }
+}
+
+fn build_blas(
+    context: &lazy_vulkan::Context,
+    allocator: &mut lazy_vulkan::Allocator,
+    command_buffer: vk::CommandBuffer,
+    primitive: &ScenePrimitive,
+) -> vk::AccelerationStructureKHR {
+    let primitive_count = primitive.index_count / 3;
+    let geometries = &[vk::AccelerationStructureGeometryKHR::default()
+        .geometry(vk::AccelerationStructureGeometryDataKHR {
+            triangles: vk::AccelerationStructureGeometryTrianglesDataKHR::default()
+                .index_data(vk::DeviceOrHostAddressConstKHR {
+                    device_address: primitive.indices,
+                })
+                .index_type(vk::IndexType::UINT32)
+                .vertex_format(vk::Format::R32G32B32_SFLOAT)
+                .vertex_data(vk::DeviceOrHostAddressConstKHR {
+                    device_address: primitive.vertices,
+                })
+                .vertex_stride(std::mem::size_of::<lazy_vulkan_gltf::Vertex>() as _)
+                .max_vertex(primitive.vertex_count - 1),
+        })
+        .geometry_type(vk::GeometryTypeKHR::TRIANGLES)
+        .flags(vk::GeometryFlagsKHR::NO_DUPLICATE_ANY_HIT_INVOCATION)];
+
+    let mut size_info = vk::AccelerationStructureBuildSizesInfoKHR::default();
+    unsafe {
+        context
+            .acceleration_structure_pfn
+            .get_acceleration_structure_build_sizes(
+                vk::AccelerationStructureBuildTypeKHR::DEVICE,
+                &vk::AccelerationStructureBuildGeometryInfoKHR::default()
+                    .ty(vk::AccelerationStructureTypeKHR::BOTTOM_LEVEL)
+                    .mode(vk::BuildAccelerationStructureModeKHR::BUILD)
+                    .geometries(geometries),
+                &[primitive_count],
+                &mut size_info,
+            )
+    };
+
+    // Build a buffer for the BLAS storage. This is essentially opaque storage used by the driver
+    let blas_storage = allocator.allocate_buffer::<u8>(
+        size_info.acceleration_structure_size as _,
+        vk::BufferUsageFlags::ACCELERATION_STRUCTURE_STORAGE_KHR,
+    );
+
+    let blas = unsafe {
+        context
+            .acceleration_structure_pfn
+            .create_acceleration_structure(
+                &vk::AccelerationStructureCreateInfoKHR::default()
+                    .ty(vk::AccelerationStructureTypeKHR::BOTTOM_LEVEL)
+                    .buffer(blas_storage.handle)
+                    .size(size_info.acceleration_structure_size),
+                None,
+            )
+    }
+    .unwrap();
+
+    let scratch_buffer = allocator.allocate_buffer_with_alignment::<u8>(
+        size_info.build_scratch_size as _,
+        context
+            .raytracing_properties
+            .min_acceleration_structure_scratch_offset_alignment as u64,
+        vk::BufferUsageFlags::STORAGE_BUFFER,
+    );
+
+    unsafe {
+        context
+            .acceleration_structure_pfn
+            .cmd_build_acceleration_structures(
+                command_buffer,
+                &[vk::AccelerationStructureBuildGeometryInfoKHR::default()
+                    .ty(vk::AccelerationStructureTypeKHR::BOTTOM_LEVEL)
+                    .mode(vk::BuildAccelerationStructureModeKHR::BUILD)
+                    .geometries(geometries)
+                    .dst_acceleration_structure(blas)
+                    .scratch_data(vk::DeviceOrHostAddressKHR {
+                        device_address: scratch_buffer.device_address,
+                    })],
+                &[&[vk::AccelerationStructureBuildRangeInfoKHR::default()
+                    .primitive_count(primitive_count)]],
+            )
+    };
+    blas
+}
+
+fn build_tlas(
+    context: &lazy_vulkan::Context,
+    allocator: &mut lazy_vulkan::Allocator,
+    scene_data: &mut SceneData,
+    command_buffer: vk::CommandBuffer,
+) -> vk::AccelerationStructureKHR {
+    //
+    // We start with instance geometries, which are the instances of the BLASes.
+    let instance_count = scene_data.instance_buffer.len() as u32;
+    let instance_geometries = &[vk::AccelerationStructureGeometryKHR::default()
+        .geometry(vk::AccelerationStructureGeometryDataKHR {
+            instances: vk::AccelerationStructureGeometryInstancesDataKHR::default()
+                .array_of_pointers(false)
+                .data(vk::DeviceOrHostAddressConstKHR {
+                    device_address: scene_data.instance_buffer.device_address,
+                }),
+        })
+        .geometry_type(vk::GeometryTypeKHR::INSTANCES)];
+
+    let mut size_info = vk::AccelerationStructureBuildSizesInfoKHR::default();
+    unsafe {
+        context
+            .acceleration_structure_pfn
+            .get_acceleration_structure_build_sizes(
+                vk::AccelerationStructureBuildTypeKHR::DEVICE,
+                &vk::AccelerationStructureBuildGeometryInfoKHR::default()
+                    .ty(vk::AccelerationStructureTypeKHR::TOP_LEVEL)
+                    .mode(vk::BuildAccelerationStructureModeKHR::BUILD)
+                    .geometries(instance_geometries),
+                &[instance_count],
+                &mut size_info,
+            )
+    };
+
+    // Allocate some storage for the TLAS. This is essentially opaque storage used by the driver
+    let tlas_storage = allocator.allocate_buffer::<u8>(
+        size_info.acceleration_structure_size as _,
+        vk::BufferUsageFlags::ACCELERATION_STRUCTURE_STORAGE_KHR,
+    );
+
+    let tlas = unsafe {
+        context
+            .acceleration_structure_pfn
+            .create_acceleration_structure(
+                &vk::AccelerationStructureCreateInfoKHR::default()
+                    .ty(vk::AccelerationStructureTypeKHR::TOP_LEVEL)
+                    .buffer(tlas_storage.handle)
+                    .size(size_info.acceleration_structure_size),
+                None,
+            )
+    }
+    .unwrap();
+
+    // Now allocate a scratch buffer for the build operation
+    let scratch_buffer = allocator.allocate_buffer_with_alignment::<u8>(
+        size_info.build_scratch_size as _,
+        context
+            .raytracing_properties
+            .min_acceleration_structure_scratch_offset_alignment as u64,
+        vk::BufferUsageFlags::STORAGE_BUFFER,
+    );
+
+    // Now build the TLAS using the BLAS geometries and the scratch buffer
+    unsafe {
+        context
+            .acceleration_structure_pfn
+            .cmd_build_acceleration_structures(
+                command_buffer,
+                &[vk::AccelerationStructureBuildGeometryInfoKHR::default()
+                    .ty(vk::AccelerationStructureTypeKHR::TOP_LEVEL)
+                    .mode(vk::BuildAccelerationStructureModeKHR::BUILD)
+                    .geometries(instance_geometries)
+                    .dst_acceleration_structure(tlas)
+                    .scratch_data(vk::DeviceOrHostAddressKHR {
+                        device_address: scratch_buffer.device_address,
+                    })],
+                &[&[vk::AccelerationStructureBuildRangeInfoKHR::default()
+                    .primitive_count(instance_count)]],
+            )
+    };
+    tlas
+}
+
+struct SBT {
     gen_region: vk::StridedDeviceAddressRegionKHR,
     miss_region: vk::StridedDeviceAddressRegionKHR,
     hit_region: vk::StridedDeviceAddressRegionKHR,
     call_region: vk::StridedDeviceAddressRegionKHR,
+}
+
+impl SBT {
+    fn new(
+        context: &lazy_vulkan::Context,
+        allocator: &mut lazy_vulkan::Allocator,
+        pipeline: vk::Pipeline,
+    ) -> SBT {
+        let miss_count = 1;
+        let hit_count = 1;
+        let handle_count = 1 + miss_count + hit_count;
+        let raytracing_properties = &context.raytracing_properties;
+        let handle_size = raytracing_properties.shader_group_handle_size;
+        let handle_size_aligned = align_up_pow2(
+            handle_size as _,
+            raytracing_properties.shader_group_handle_alignment as _,
+        );
+
+        let stride = align_up_pow2(
+            handle_size_aligned,
+            raytracing_properties.shader_group_base_alignment as _,
+        );
+        let mut gen_region = vk::StridedDeviceAddressRegionKHR::default()
+            .stride(stride)
+            .size(stride);
+
+        let mut miss_region = vk::StridedDeviceAddressRegionKHR::default()
+            .stride(handle_size_aligned)
+            .size(align_up_pow2(
+                miss_count * handle_size_aligned,
+                raytracing_properties.shader_group_base_alignment as u64,
+            ));
+
+        let mut hit_region = vk::StridedDeviceAddressRegionKHR::default()
+            .stride(handle_size_aligned)
+            .size(align_up_pow2(
+                hit_count * handle_size_aligned,
+                raytracing_properties.shader_group_base_alignment as u64,
+            ));
+
+        let call_region = vk::StridedDeviceAddressRegionKHR::default();
+
+        let data_size = handle_count * (handle_size as u64);
+
+        let handles = unsafe {
+            context
+                .ray_tracing_pipeline_pfn
+                .get_ray_tracing_shader_group_handles(
+                    pipeline,
+                    0,
+                    handle_count as u32,
+                    data_size as usize,
+                )
+        }
+        .unwrap();
+
+        // Copy data
+        let sbt_size = gen_region.size + miss_region.size + hit_region.size + call_region.size;
+        let mut sbt_data = vec![0; sbt_size as usize];
+
+        let mut offset = 0;
+        sbt_data[offset..handle_size as usize].copy_from_slice(&handles[..handle_size as usize]);
+        offset += gen_region.size as usize;
+        sbt_data[offset..offset + handle_size as usize]
+            .copy_from_slice(&handles[handle_size as usize..(handle_size as usize) * 2]);
+
+        offset += miss_region.size as usize;
+        sbt_data[offset..offset + handle_size as usize]
+            .copy_from_slice(&handles[(handle_size as usize * 2)..(handle_size as usize) * 3]);
+
+        let mut sbt_buffer = allocator.allocate_buffer::<u8>(
+            sbt_size as usize,
+            vk::BufferUsageFlags::TRANSFER_SRC | vk::BufferUsageFlags::SHADER_BINDING_TABLE_KHR,
+        );
+
+        sbt_buffer.append(&sbt_data, allocator);
+
+        gen_region.device_address = sbt_buffer.device_address;
+        miss_region.device_address = gen_region.device_address + gen_region.size;
+        hit_region.device_address = gen_region.device_address + gen_region.size + miss_region.size;
+
+        SBT {
+            gen_region,
+            miss_region,
+            hit_region,
+            call_region,
+        }
+    }
 }
 
 #[repr(C)]
@@ -962,4 +984,60 @@ pub const fn align_up_pow2(value: u64, alignment: u64) -> u64 {
 
 pub const fn is_pow2(a: u64) -> bool {
     a != 0 && (a & (a - 1)) == 0
+}
+
+fn create_rt_pipeline(
+    pipeline_layout: vk::PipelineLayout,
+    raygen_index: u32,
+    miss_index: u32,
+    closest_hit_index: u32,
+    context: &Arc<lazy_vulkan::Context>,
+) -> vk::Pipeline {
+    let pipeline = unsafe {
+        context
+            .ray_tracing_pipeline_pfn
+            .create_ray_tracing_pipelines(
+                vk::DeferredOperationKHR::null(),
+                vk::PipelineCache::null(),
+                &[vk::RayTracingPipelineCreateInfoKHR::default()
+                    .groups(&[
+                        vk::RayTracingShaderGroupCreateInfoKHR::default()
+                            .ty(vk::RayTracingShaderGroupTypeKHR::GENERAL)
+                            .any_hit_shader(vk::SHADER_UNUSED_KHR)
+                            .closest_hit_shader(vk::SHADER_UNUSED_KHR)
+                            .intersection_shader(vk::SHADER_UNUSED_KHR)
+                            .general_shader(raygen_index),
+                        vk::RayTracingShaderGroupCreateInfoKHR::default()
+                            .ty(vk::RayTracingShaderGroupTypeKHR::GENERAL)
+                            .any_hit_shader(vk::SHADER_UNUSED_KHR)
+                            .closest_hit_shader(vk::SHADER_UNUSED_KHR)
+                            .intersection_shader(vk::SHADER_UNUSED_KHR)
+                            .general_shader(miss_index),
+                        vk::RayTracingShaderGroupCreateInfoKHR::default()
+                            .ty(vk::RayTracingShaderGroupTypeKHR::TRIANGLES_HIT_GROUP)
+                            .any_hit_shader(vk::SHADER_UNUSED_KHR)
+                            .closest_hit_shader(closest_hit_index)
+                            .intersection_shader(vk::SHADER_UNUSED_KHR)
+                            .general_shader(vk::SHADER_UNUSED_KHR),
+                    ])
+                    .stages(&[
+                        vk::PipelineShaderStageCreateInfo::default()
+                            .stage(vk::ShaderStageFlags::RAYGEN_KHR)
+                            .name(c"main")
+                            .module(lazy_vulkan::load_module(&r(RAYGEN_SHADER_PATH), context)),
+                        vk::PipelineShaderStageCreateInfo::default()
+                            .stage(vk::ShaderStageFlags::MISS_KHR)
+                            .name(c"main")
+                            .module(lazy_vulkan::load_module(&r(MISS_SHADER_PATH), context)),
+                        vk::PipelineShaderStageCreateInfo::default()
+                            .stage(vk::ShaderStageFlags::CLOSEST_HIT_KHR)
+                            .name(c"main")
+                            .module(lazy_vulkan::load_module(&r(CLOSEST_SHADER_PATH), context)),
+                    ])
+                    .layout(pipeline_layout)],
+                None,
+            )
+    }
+    .unwrap()[0];
+    pipeline
 }
