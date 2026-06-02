@@ -119,6 +119,64 @@ pub fn generate_slab_bed(track: &Track, start_s_m: f32, length_m: f32) -> Tunnel
     TunnelMesh { vertices, indices }
 }
 
+pub fn generate_rails(track: &Track, start_s_m: f32, length_m: f32) -> TunnelMesh {
+    let ring_spacing_m = 1.0;
+    let rail_gauge_m = 1.435;
+    let rail_half_width_m = 0.055;
+    let rail_height_m = 0.13;
+    let rail_base_y_m = -1.02;
+
+    let rail_x_offsets = [-rail_gauge_m * 0.5, rail_gauge_m * 0.5];
+    let ring_count = (length_m / ring_spacing_m).ceil() as usize + 1;
+    let verts_per_ring = 8;
+
+    let mut vertices = Vec::with_capacity(ring_count * verts_per_ring);
+    let mut indices = Vec::new();
+
+    for ring_index in 0..ring_count {
+        let ring_t = ring_index as f32 / (ring_count - 1) as f32;
+        let s_m = start_s_m + ring_t * length_m;
+        let frame = track.sample(s_m);
+
+        for rail_x_m in rail_x_offsets {
+            let corners = [
+                (-rail_half_width_m, 0.0, -frame.up),
+                (rail_half_width_m, 0.0, -frame.up),
+                (rail_half_width_m, rail_height_m, frame.up),
+                (-rail_half_width_m, rail_height_m, frame.up),
+            ];
+
+            for (local_dx_m, local_y_m, normal) in corners {
+                let position = frame.origin
+                    + frame.right * (rail_x_m + local_dx_m)
+                    + frame.up * (rail_base_y_m + local_y_m);
+
+                let uv = glam::vec2(local_dx_m + rail_half_width_m, s_m);
+                vertices.push(Vertex::new(position, normal, Some(uv)));
+            }
+        }
+    }
+
+    for ring_index in 0..(ring_count - 1) {
+        for rail_index in 0..2 {
+            let base0 = (ring_index * verts_per_ring + rail_index * 4) as u32;
+            let base1 = base0 + verts_per_ring as u32;
+
+            // left side, top, right side. Bottom is omitted; it sits on the slab.
+            for (a, b) in [(0, 3), (3, 2), (2, 1)] {
+                let v0 = base0 + a;
+                let v1 = base0 + b;
+                let v2 = base1 + a;
+                let v3 = base1 + b;
+
+                indices.extend_from_slice(&[v0, v2, v1, v1, v2, v3]);
+            }
+        }
+    }
+
+    TunnelMesh { vertices, indices }
+}
+
 fn lerp(a: f32, b: f32, t: f32) -> f32 {
     a + (b - a) * t
 }
@@ -169,6 +227,26 @@ mod tests {
 
         assert_eq!(mesh.vertices.len(), 22);
         assert_eq!(mesh.indices.len(), 60);
+        assert_eq!(mesh.indices.len() % 3, 0);
+    }
+
+    #[test]
+    fn rail_chunks_share_exact_seam_vertices() {
+        let track = Track::metro_loop();
+
+        let a = generate_rails(&track, 1_190.0, 20.0);
+        let b = generate_rails(&track, 1_210.0, 20.0);
+
+        assert!(max_shared_ring_error(&a, &b, 8) < 0.0001);
+    }
+
+    #[test]
+    fn rails_have_expected_topology() {
+        let track = Track::metro_loop();
+        let mesh = generate_rails(&track, 0.0, 20.0);
+
+        assert_eq!(mesh.vertices.len(), 168);
+        assert_eq!(mesh.indices.len(), 720);
         assert_eq!(mesh.indices.len() % 3, 0);
     }
 }

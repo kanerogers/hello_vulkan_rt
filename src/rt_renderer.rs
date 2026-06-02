@@ -11,7 +11,7 @@ use crate::{
     demo_state::{DemoState, TRACK_LENGTH_METRES},
     graphics::{RenderState, RenderStateFamily},
     track::{Track, TrackFrame},
-    tunnel_mesh::{generate_slab_bed, generate_tunnel_shell},
+    tunnel_mesh::{generate_rails, generate_slab_bed, generate_tunnel_shell},
 };
 
 static CLOSEST_SHADER_PATH: &'static str = "shaders/closesthit.rchit.spv";
@@ -435,12 +435,37 @@ impl SceneData {
         let slab_vertices = vertex_buffer.tip_address();
         vertex_buffer.append(&slab_mesh.vertices, &mut renderer.allocator);
 
+        // Make a slab material
         let slab_material = renderer
             .allocator
             .upload_to_slab(&[lazy_vulkan_gltf::GPUMaterial {
                 base_colour_factor: glam::vec4(0.32, 0.33, 0.33, 1.0),
                 emissive_colour_factor: glam::Vec3::ZERO,
 
+                base_colour_texture: no_texture,
+                normal_texture: no_texture,
+                metallic_roughness_texture: no_texture,
+                ao_texture: no_texture,
+            }]);
+
+        // Generate the rails
+        let rail_mesh = generate_rails(&track, 0.0, TRACK_LENGTH_METRES);
+        let rail_indices = index_buffer.tip_address();
+        index_buffer.append(&rail_mesh.indices, &mut renderer.allocator);
+        let rail_vertices = vertex_buffer.tip_address();
+        vertex_buffer.append(&rail_mesh.vertices, &mut renderer.allocator);
+
+        log::info!(
+            "Generated rail mesh: vertices={} indices={}",
+            rail_mesh.vertices.len(),
+            rail_mesh.indices.len()
+        );
+
+        let rail_material = renderer
+            .allocator
+            .upload_to_slab(&[lazy_vulkan_gltf::GPUMaterial {
+                base_colour_factor: glam::vec4(0.10, 0.105, 0.11, 1.0),
+                emissive_colour_factor: glam::Vec3::ZERO,
                 base_colour_texture: no_texture,
                 normal_texture: no_texture,
                 metallic_roughness_texture: no_texture,
@@ -462,6 +487,13 @@ impl SceneData {
                 index_count: slab_mesh.indices.len() as u32,
                 vertex_count: slab_mesh.vertices.len() as u32,
                 material: slab_material.device_address,
+            },
+            ScenePrimitive {
+                indices: rail_indices,
+                vertices: rail_vertices,
+                index_count: rail_mesh.indices.len() as u32,
+                vertex_count: rail_mesh.vertices.len() as u32,
+                material: rail_material.device_address,
             },
         ];
 
@@ -495,6 +527,10 @@ impl SceneData {
             },
             SceneInstance {
                 primitive_index: 1,
+                world_from_local: glam::Affine3A::default(),
+            },
+            SceneInstance {
+                primitive_index: 2,
                 world_from_local: glam::Affine3A::default(),
             },
         ];
