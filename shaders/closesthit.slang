@@ -52,7 +52,7 @@ void main(inout HitPayload payload,
 
   let baseAlbedo = saturate(material.baseColourFactor.rgb);
 
-  let panelPhase = frac(uv.y / 10.0);
+  let panelPhase = frac(uv.y / registers.tunnelBayLengthMetres);
   let panelBand = panelPhase < 0.0100 ? 0.05 : 1.0;
   let albedo = baseAlbedo * panelBand;
 

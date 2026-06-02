@@ -24,6 +24,8 @@ impl Default for TunnelMeshParams {
     }
 }
 
+pub const TUNNEL_BAY_LENGTH_METRES: f32 = 10.0;
+
 pub fn generate_tunnel_shell(
     track: &Track,
     start_s_m: f32,
@@ -283,7 +285,7 @@ pub fn generate_cable_tray(track: &Track, start_s_m: f32, length_m: f32) -> Gene
 }
 
 pub fn generate_led_tubes(track: &Track, start_s_m: f32, length_m: f32) -> GeneratedMesh {
-    let spacing_m = 12.0;
+    let spacing_m = TUNNEL_BAY_LENGTH_METRES;
     let tube_length_m = 4.0;
 
     let center_x_m = 0.0;

@@ -23,6 +23,7 @@ struct Registers {
   float4x4 viewInverse;
   float4x4 projInverse;
   Primitive *primitiveBuffer;
+  float tunnelBayLengthMetres;
   uint frame;
 };
 
