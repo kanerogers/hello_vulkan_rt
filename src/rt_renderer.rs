@@ -451,12 +451,13 @@ impl SceneData {
 
         // Generate the LED tubes
         let led_tube_mesh = generate_led_tubes(track, 0.0, TRACK_LENGTH_METRES);
-        let led_tubes = create_scene_primitive(
+        let led_tubes = create_scene_primitive_with_emission(
             renderer,
             &mut vertex_buffer,
             &mut index_buffer,
             led_tube_mesh,
             glam::vec4(0.82, 0.90, 1.0, 1.0),
+            glam::vec3(0.65, 0.85, 1.0),
         );
 
         // Gather our scene primitives
@@ -527,6 +528,24 @@ fn create_scene_primitive(
     mesh: mesh_generation::GeneratedMesh,
     base_colour_factor: glam::Vec4,
 ) -> ScenePrimitive {
+    create_scene_primitive_with_emission(
+        renderer,
+        vertex_buffer,
+        index_buffer,
+        mesh,
+        base_colour_factor,
+        glam::Vec3::ZERO,
+    )
+}
+
+fn create_scene_primitive_with_emission(
+    renderer: &mut lazy_vulkan::Renderer<RenderStateFamily>,
+    vertex_buffer: &mut BufferAllocation<lazy_vulkan_gltf::Vertex>,
+    index_buffer: &mut BufferAllocation<u32>,
+    mesh: mesh_generation::GeneratedMesh,
+    base_colour_factor: glam::Vec4,
+    emissive_colour_factor: glam::Vec3,
+) -> ScenePrimitive {
     // Upload mesh to buffer
     let tunnel_indices = index_buffer.tip_address();
     index_buffer.append(&mesh.indices, &mut renderer.allocator);
@@ -540,7 +559,7 @@ fn create_scene_primitive(
         .allocator
         .upload_to_slab(&[lazy_vulkan_gltf::GPUMaterial {
             base_colour_factor,
-            emissive_colour_factor: glam::Vec3::ZERO,
+            emissive_colour_factor,
 
             base_colour_texture: no_texture,
             normal_texture: no_texture,

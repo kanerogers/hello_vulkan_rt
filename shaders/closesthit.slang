@@ -66,7 +66,8 @@ void main(inout HitPayload payload,
   // Fake lighting for now
   let lightDir = normalize(float3(0.25, 0.75, 0.35));
   let ndotl = saturate(dot(worldNormal, lightDir));
-  payload.hitValue = albedo * (0.08 + 0.75 * ndotl);
+  payload.hitValue =
+      material.emissiveColourFactor + brdf * (0.08 + 0.75 * ndotl);
   payload.weight = float3(0.0);
   payload.depth = 100;
 }
