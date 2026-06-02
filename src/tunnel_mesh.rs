@@ -83,29 +83,92 @@ pub fn generate_tunnel_shell(
     TunnelMesh { vertices, indices }
 }
 
-pub fn log_tunnel_mesh_debug(track: &Track) {
-    let params = TunnelMeshParams::default();
-    let chunk_a = generate_tunnel_shell(track, 1_190.0, 20.0, params);
-    let chunk_b = generate_tunnel_shell(track, 1_210.0, 20.0, TunnelMeshParams::default());
+pub fn generate_slab_bed(track: &Track, start_s_m: f32, length_m: f32) -> TunnelMesh {
+    let ring_spacing_m = 2.0;
+    let half_width_m = 1.75;
+    let slab_y_m = -1.08;
 
-    let profile_count = TunnelMeshParams::default().profile_segments + 1;
-    let last_a = chunk_a.vertices.len() - profile_count;
+    let ring_count = (length_m / ring_spacing_m).ceil() as usize + 1;
 
-    let mut max_seam_error_m: f32 = 0.0;
-    for i in 0..profile_count {
-        let pa = chunk_a.vertices[last_a + i].position;
-        let pb = chunk_b.vertices[i].position;
-        max_seam_error_m = max_seam_error_m.max(pa.distance(pb));
+    let mut vertices = Vec::with_capacity(ring_count * 2);
+    let mut indices = Vec::new();
+
+    for ring_index in 0..ring_count {
+        let ring_t = ring_index as f32 / (ring_count - 1) as f32;
+        let s_m = start_s_m + ring_t * length_m;
+        let frame = track.sample(s_m);
+
+        for (side_index, x_m) in [-half_width_m, half_width_m].into_iter().enumerate() {
+            let position = frame.origin + frame.right * x_m + frame.up * slab_y_m;
+            let normal = frame.up;
+            let uv = glam::vec2(side_index as f32 * half_width_m * 2.0, s_m);
+
+            vertices.push(Vertex::new(position, normal, Some(uv)));
+        }
     }
 
-    log::info!(
-        "tunnel mesh: vertices={} indices={} seam_error={:.6}m",
-        chunk_a.vertices.len(),
-        chunk_a.indices.len(),
-        max_seam_error_m,
-    );
+    for ring_index in 0..(ring_count - 1) {
+        let a = (ring_index * 2) as u32;
+        let b = a + 1;
+        let c = a + 2;
+        let d = a + 3;
+
+        indices.extend_from_slice(&[a, c, b, b, c, d]);
+    }
+
+    TunnelMesh { vertices, indices }
 }
 
 fn lerp(a: f32, b: f32, t: f32) -> f32 {
     a + (b - a) * t
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn max_shared_ring_error(a: &TunnelMesh, b: &TunnelMesh, ring_vertex_count: usize) -> f32 {
+        let last_a = a.vertices.len() - ring_vertex_count;
+
+        let mut max_error_m: f32 = 0.0;
+        for i in 0..ring_vertex_count {
+            let pa = a.vertices[last_a + i].position;
+            let pb = b.vertices[i].position;
+            max_error_m = max_error_m.max(pa.distance(pb));
+        }
+
+        max_error_m
+    }
+
+    #[test]
+    fn tunnel_shell_chunks_share_exact_seam_vertices() {
+        let track = Track::metro_loop();
+        let params = TunnelMeshParams::default();
+
+        let a = generate_tunnel_shell(&track, 1_190.0, 20.0, params);
+        let b = generate_tunnel_shell(&track, 1_210.0, 20.0, TunnelMeshParams::default());
+
+        let ring_vertex_count = TunnelMeshParams::default().profile_segments + 1;
+        assert!(max_shared_ring_error(&a, &b, ring_vertex_count) < 0.0001);
+    }
+
+    #[test]
+    fn slab_bed_chunks_share_exact_seam_vertices() {
+        let track = Track::metro_loop();
+
+        let a = generate_slab_bed(&track, 1_190.0, 20.0);
+        let b = generate_slab_bed(&track, 1_210.0, 20.0);
+
+        assert!(max_shared_ring_error(&a, &b, 2) < 0.0001);
+    }
+
+    #[test]
+    fn slab_bed_has_expected_topology() {
+        let track = Track::metro_loop();
+        let mesh = generate_slab_bed(&track, 0.0, 20.0);
+
+        assert_eq!(mesh.vertices.len(), 22);
+        assert_eq!(mesh.indices.len(), 60);
+        assert_eq!(mesh.indices.len() % 3, 0);
+    }
 }

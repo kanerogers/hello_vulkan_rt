@@ -26,7 +26,6 @@ impl ApplicationHandler for App {
         lazy_vulkan.add_sub_renderer(Box::new(renderer));
 
         track.log_debug_samples();
-        tunnel_mesh::log_tunnel_mesh_debug(&track);
 
         self.state = Some(State {
             window,
