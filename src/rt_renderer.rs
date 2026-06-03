@@ -283,6 +283,8 @@ impl<'a> SubRenderer<'a> for RTRenderer {
                 primitive_buffer: scene_data.primitive_buffer.device_address,
                 tunnel_bay_length_metres: TUNNEL_BAY_LENGTH_METRES,
                 frame: 0, // TODO
+                light_buffer: scene_data.light_buffer.device_address,
+                light_count: scene_data.light_buffer.len() as u32,
             };
 
             device.cmd_push_constants(
@@ -377,6 +379,9 @@ pub struct SceneData {
     instance_buffer: BufferAllocation<vk::AccelerationStructureInstanceKHR>,
     scene_primitives: Vec<ScenePrimitive>,
     scene_instances: Vec<SceneInstance>,
+    #[allow(unused)]
+    tunnel_lights: Vec<TunnelLight>,
+    light_buffer: BufferAllocation<TunnelLight>,
 }
 
 impl SceneData {
@@ -397,6 +402,10 @@ impl SceneData {
         let mut primitive_buffer = renderer
             .allocator
             .allocate_buffer(10 * 1024 * 1024, vk::BufferUsageFlags::STORAGE_BUFFER);
+
+        let mut light_buffer = renderer
+            .allocator
+            .allocate_buffer(1024, vk::BufferUsageFlags::STORAGE_BUFFER);
 
         // Create the tunnel mesh
         let tunnel_mesh =
@@ -512,6 +521,12 @@ impl SceneData {
                 vk::BufferUsageFlags::ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_KHR,
             );
 
+        // Create our lights
+        let tunnel_lights = generate_tunnel_lights(track, &led_tube_fixtures);
+
+        // Upload to the light buffer
+        light_buffer.append(&tunnel_lights, &mut renderer.allocator);
+
         Self {
             vertex_buffer,
             index_buffer,
@@ -519,6 +534,8 @@ impl SceneData {
             instance_buffer,
             scene_primitives,
             scene_instances,
+            tunnel_lights,
+            light_buffer,
         }
     }
 }
@@ -906,6 +923,19 @@ fn build_tlas(
     tlas
 }
 
+pub fn glam_to_khr(transform: glam::Affine3A) -> vk::TransformMatrixKHR {
+    let cols = transform.to_cols_array_2d();
+
+    // needs to be row major
+    vk::TransformMatrixKHR {
+        matrix: [
+            cols[0][0], cols[1][0], cols[2][0], cols[3][0], // row 0
+            cols[0][1], cols[1][1], cols[2][1], cols[3][1], // row 1
+            cols[0][2], cols[1][2], cols[2][2], cols[3][2], // row 2
+        ],
+    }
+}
+
 struct SBT {
     gen_region: vk::StridedDeviceAddressRegionKHR,
     miss_region: vk::StridedDeviceAddressRegionKHR,
@@ -1001,6 +1031,19 @@ impl SBT {
     }
 }
 
+// TLAS helpers
+
+// SBT helpers
+
+pub const fn align_up_pow2(value: u64, alignment: u64) -> u64 {
+    debug_assert!(is_pow2(alignment));
+    (value + (alignment - 1)) & !(alignment - 1)
+}
+
+pub const fn is_pow2(a: u64) -> bool {
+    a != 0 && (a & (a - 1)) == 0
+}
+
 #[repr(C)]
 #[derive(Copy, Clone, Debug)]
 struct Primitive {
@@ -1020,6 +1063,8 @@ struct Registers {
     primitive_buffer: vk::DeviceAddress,
     tunnel_bay_length_metres: f32,
     frame: u32,
+    light_buffer: vk::DeviceAddress,
+    light_count: u32,
 }
 
 unsafe impl bytemuck::Zeroable for Registers {}
@@ -1080,27 +1125,7 @@ fn camera_view_from_train_frame(train_frame: TrackFrame, demo_state: &DemoState)
     world_from_camera
 }
 
-pub fn glam_to_khr(transform: glam::Affine3A) -> vk::TransformMatrixKHR {
-    let cols = transform.to_cols_array_2d();
-
-    // needs to be row major
-    vk::TransformMatrixKHR {
-        matrix: [
-            cols[0][0], cols[1][0], cols[2][0], cols[3][0], // row 0
-            cols[0][1], cols[1][1], cols[2][1], cols[3][1], // row 1
-            cols[0][2], cols[1][2], cols[2][2], cols[3][2], // row 2
-        ],
-    }
-}
-
-pub const fn align_up_pow2(value: u64, alignment: u64) -> u64 {
-    debug_assert!(is_pow2(alignment));
-    (value + (alignment - 1)) & !(alignment - 1)
-}
-
-pub const fn is_pow2(a: u64) -> bool {
-    a != 0 && (a & (a - 1)) == 0
-}
+// Pipeline helpers
 
 fn create_rt_pipeline(
     pipeline_layout: vk::PipelineLayout,
@@ -1156,4 +1181,44 @@ fn create_rt_pipeline(
     }
     .unwrap()[0];
     pipeline
+}
+
+// Lights
+#[repr(C)]
+#[derive(Copy, Clone, Debug)]
+struct TunnelLight {
+    #[allow(unused)]
+    position: glam::Vec3,
+    #[allow(unused)]
+    radius_metres: f32,
+    #[allow(unused)]
+    colour: glam::Vec3,
+    #[allow(unused)]
+    intensity: f32,
+}
+
+unsafe impl bytemuck::Zeroable for TunnelLight {}
+unsafe impl bytemuck::Pod for TunnelLight {}
+
+fn generate_tunnel_lights(
+    track: &Track,
+    fixtures: &[mesh_generation::LedTubeFixture],
+) -> Vec<TunnelLight> {
+    fixtures
+        .iter()
+        .map(|fixture| {
+            let center_s_metres = fixture.start_s_metres + fixture.length_metres * 0.5;
+            let frame = track.sample(center_s_metres);
+
+            let position =
+                frame.origin + frame.right * fixture.x_metres + frame.up * fixture.y_metres;
+
+            TunnelLight {
+                position,
+                radius_metres: fixture.radius_metres,
+                colour: fixture.colour,
+                intensity: fixture.intensity,
+            }
+        })
+        .collect()
 }

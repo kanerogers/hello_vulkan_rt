@@ -25,6 +25,8 @@ struct Registers {
   Primitive *primitiveBuffer;
   float tunnelBayLengthMetres;
   uint frame;
+  TunnelLight *lightBuffer;
+  uint lightCount;
 };
 
 [[vk::push_constant]]
@@ -38,3 +40,10 @@ struct HitPayload {
   float3 rayDirection;
   float3 weight;
 };
+
+struct TunnelLight {
+  float3 position;
+  float radiusMetres;
+  float3 colour;
+  float intensity;
+}
