@@ -63,11 +63,28 @@ void main(inout HitPayload payload,
   // payload.hitValue = emittance;
   // payload.weight = brdf * cosTheta / p;
 
-  // Fake lighting for now
-  let lightDir = normalize(float3(0.25, 0.75, 0.35));
-  let ndotl = saturate(dot(worldNormal, lightDir));
-  payload.hitValue =
-      material.emissiveColourFactor + brdf * (0.08 + 0.75 * ndotl);
+  let emissive = material.emissiveColourFactor;
+
+  var directLight = float3(0.0);
+
+  let maxDebugLights = min(registers.lightCount, 64u);
+
+  for (uint lightIndex = 0; lightIndex < maxDebugLights; lightIndex++) {
+    let light = registers.lightBuffer[lightIndex];
+
+    let toLight = light.position - worldPosition;
+    let distanceMetres = length(toLight);
+    let lightDir = toLight / max(distanceMetres, 0.001);
+
+    let ndotl = saturate(dot(worldNormal, lightDir));
+
+    let radiusFade = saturate(1.0 - distanceMetres / light.radiusMetres);
+    let attenuation = radiusFade * radiusFade;
+
+    directLight += light.colour * light.intensity * ndotl * attenuation;
+  }
+
+  payload.hitValue = emissive + albedo * (0.04 + directLight);
   payload.weight = float3(0.0);
   payload.depth = 100;
 }
