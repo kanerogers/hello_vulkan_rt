@@ -19,7 +19,6 @@ use crate::{
 };
 
 static CLOSEST_HIT_SHADER_PATH: &'static str = "shaders/closesthit.rchit.spv";
-static SHADOW_HIT_SHADER_PATH: &'static str = "shaders/shadowhit.rchit.spv";
 static MISS_SHADER_PATH: &'static str = "shaders/miss.rmiss.spv";
 static SHADOW_MISS_SHADER_PATH: &'static str = "shaders/shadowmiss.rmiss.spv";
 static RAYGEN_SHADER_PATH: &'static str = "shaders/raygen.rgen.spv";
@@ -30,7 +29,6 @@ const RAYGEN_INDEX: u32 = 0;
 const MISS_INDEX: u32 = 1;
 const SHADOW_MISS_INDEX: u32 = 2;
 const CLOSEST_HIT_INDEX: u32 = 3;
-const SHADOW_HIT_INDEX: u32 = 4;
 
 pub struct RTRenderer {
     context: Arc<lazy_vulkan::Context>,
@@ -959,7 +957,7 @@ impl SBT {
         pipeline: vk::Pipeline,
     ) -> SBT {
         let miss_count = 2;
-        let hit_count = 2;
+        let hit_count = 1;
         let handle_count = 1 + miss_count + hit_count;
         let raytracing_properties = &context.raytracing_properties;
         let handle_size = raytracing_properties.shader_group_handle_size;
@@ -1027,7 +1025,6 @@ impl SBT {
 
         let hit_offset = miss_offset + miss_region.size as usize;
         copy_group(hit_offset, 3);
-        copy_group(hit_offset + hit_region.stride as usize, 4);
 
         let mut sbt_buffer = allocator.allocate_buffer::<u8>(
             sbt_size as usize,
@@ -1183,12 +1180,6 @@ fn create_rt_pipeline(
                             .closest_hit_shader(CLOSEST_HIT_INDEX)
                             .intersection_shader(vk::SHADER_UNUSED_KHR)
                             .general_shader(vk::SHADER_UNUSED_KHR),
-                        vk::RayTracingShaderGroupCreateInfoKHR::default()
-                            .ty(vk::RayTracingShaderGroupTypeKHR::TRIANGLES_HIT_GROUP)
-                            .any_hit_shader(vk::SHADER_UNUSED_KHR)
-                            .closest_hit_shader(SHADOW_HIT_INDEX)
-                            .intersection_shader(vk::SHADER_UNUSED_KHR)
-                            .general_shader(vk::SHADER_UNUSED_KHR),
                     ])
                     .stages(&[
                         vk::PipelineShaderStageCreateInfo::default()
@@ -1211,13 +1202,6 @@ fn create_rt_pipeline(
                             .name(c"main")
                             .module(lazy_vulkan::load_module(
                                 &r(CLOSEST_HIT_SHADER_PATH),
-                                context,
-                            )),
-                        vk::PipelineShaderStageCreateInfo::default()
-                            .stage(vk::ShaderStageFlags::CLOSEST_HIT_KHR)
-                            .name(c"main")
-                            .module(lazy_vulkan::load_module(
-                                &r(SHADOW_HIT_SHADER_PATH),
                                 context,
                             )),
                     ])

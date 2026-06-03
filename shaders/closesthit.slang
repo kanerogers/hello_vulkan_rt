@@ -100,10 +100,11 @@ void main(inout HitPayload payload,
     shadowRay.TMax = max(distanceMetres - 1.0, 0.001);
 
     ShadowPayload shadowPayload;
-    shadowPayload.hit = false;
+    shadowPayload.hit = true;
 
     TraceRay(tlas,
-             RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH | RAY_FLAG_FORCE_OPAQUE,
+             RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH | RAY_FLAG_FORCE_OPAQUE |
+                 RAY_FLAG_SKIP_CLOSEST_HIT_SHADER,
              0xFF, RAY_TYPE_SHADOW, RAY_TYPE_COUNT, MISS_TYPE_SHADOW, shadowRay,
              shadowPayload);
 
