@@ -45,7 +45,7 @@ impl RTRenderer {
         let extent = renderer.get_drawable_extent();
         let image = renderer.create_image(
             "RT Target",
-            vk::Format::R8G8B8A8_UNORM,
+            vk::Format::R16G16B16A16_SFLOAT,
             extent,
             &[],
             vk::ImageUsageFlags::STORAGE

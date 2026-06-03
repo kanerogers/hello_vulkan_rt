@@ -14,8 +14,14 @@ struct FragmentInput {
 
 [shader("fragment")]
 float4 main(FragmentInput input) : SV_Target0 {
-  float gamma = 1.0 / 2.2;
-  return pow(
-      textures[NonUniformResourceIndex(registers.textureID)].Sample(input.uv),
-      float4(gamma));
+  let hdr = max(textures[NonUniformResourceIndex(registers.textureID)]
+                    .Sample(input.uv)
+                    .rgb,
+                float3(0.0));
+
+  let exposure = 0.35;
+  let mapped = 1.0 - exp(-hdr * exposure);
+
+  let gamma = 1.0 / 2.2;
+  return float4(pow(saturate(mapped), float3(gamma)), 1.0);
 }

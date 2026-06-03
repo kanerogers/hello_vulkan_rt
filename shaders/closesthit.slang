@@ -54,7 +54,7 @@ void main(inout HitPayload payload,
 
   let panelPhase = frac(uv.y / registers.tunnelBayLengthMetres);
   let panelBand = panelPhase < 0.0100 ? 0.05 : 1.0;
-  let albedo = baseAlbedo * panelBand;
+  let albedo = saturate(baseAlbedo * panelBand);
 
   float3 brdf = albedo / M_PI;
 
@@ -91,7 +91,7 @@ void main(inout HitPayload payload,
     directLight += light.colour * light.intensity * ndotl * attenuation;
   }
 
-  payload.hitValue = emissive + albedo * (0.04 + directLight);
+  payload.hitValue = emissive + albedo * (0.01 + directLight);
   payload.weight = float3(0.0);
   payload.depth = 100;
 }

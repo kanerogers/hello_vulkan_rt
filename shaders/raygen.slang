@@ -5,7 +5,7 @@ import sampling;
 RaytracingAccelerationStructure tlas;
 
 [[vk::binding(1, 0)]]
-[vk::image_format("rgba8")]
+[vk::image_format("rgba16f")]
 RWTexture2D<float4> image;
 
 [shader("raygeneration")]

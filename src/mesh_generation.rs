@@ -290,7 +290,7 @@ pub const LED_TUBE_Y_METRES: f32 = 3.52;
 pub const LED_TUBE_HALF_WIDTH_METRES: f32 = 0.09;
 pub const LED_TUBE_HALF_HEIGHT_METRES: f32 = 0.035;
 pub const LED_TUBE_LIGHT_RADIUS_METRES: f32 = 7.0;
-pub const LED_TUBE_LIGHT_INTENSITY: f32 = 0.6;
+pub const LED_TUBE_LIGHT_INTENSITY: f32 = 2.0;
 
 #[derive(Copy, Clone, Debug)]
 pub struct LedTubeFixture {
@@ -312,18 +312,34 @@ pub fn generate_led_tube_fixtures(track_length_metres: f32) -> Vec<LedTubeFixtur
     let fixture_count = (track_length_metres / TUNNEL_BAY_LENGTH_METRES).floor() as usize;
 
     (0..fixture_count)
-        .map(|fixture_index| LedTubeFixture {
-            start_s_metres: fixture_index as f32 * TUNNEL_BAY_LENGTH_METRES,
-            length_metres: LED_TUBE_LENGTH_METRES,
-            x_metres: LED_TUBE_X_METRES,
-            y_metres: LED_TUBE_Y_METRES,
-            half_width_metres: LED_TUBE_HALF_WIDTH_METRES,
-            half_height_metres: LED_TUBE_HALF_HEIGHT_METRES,
-            colour: glam::vec3(0.65, 0.82, 1.0),
-            intensity: LED_TUBE_LIGHT_INTENSITY,
-            radius_metres: LED_TUBE_LIGHT_RADIUS_METRES,
+        .map(|fixture_index| {
+            let start_s_metres = fixture_index as f32 * TUNNEL_BAY_LENGTH_METRES;
+            let intensity = led_tube_intensity_for_s(start_s_metres);
+            LedTubeFixture {
+                start_s_metres,
+                length_metres: LED_TUBE_LENGTH_METRES,
+                x_metres: LED_TUBE_X_METRES,
+                y_metres: LED_TUBE_Y_METRES,
+                half_width_metres: LED_TUBE_HALF_WIDTH_METRES,
+                half_height_metres: LED_TUBE_HALF_HEIGHT_METRES,
+                colour: glam::vec3(0.65, 0.82, 1.0),
+                intensity,
+                radius_metres: LED_TUBE_LIGHT_RADIUS_METRES,
+            }
         })
         .collect()
+}
+
+fn led_tube_intensity_for_s(start_s_metres: f32) -> f32 {
+    let zone_index = (start_s_metres / 250.0).floor() as u32;
+
+    match zone_index % 5 {
+        0 => LED_TUBE_LIGHT_INTENSITY,
+        1 => LED_TUBE_LIGHT_INTENSITY * 0.45,
+        2 => LED_TUBE_LIGHT_INTENSITY * 0.85,
+        3 => LED_TUBE_LIGHT_INTENSITY * 0.25,
+        _ => LED_TUBE_LIGHT_INTENSITY * 1.15,
+    }
 }
 
 pub fn generate_led_tubes(track: &Track, fixtures: &[LedTubeFixture]) -> GeneratedMesh {
