@@ -27,6 +27,8 @@ struct Registers {
   uint frame;
   TunnelLight *lightBuffer;
   uint lightCount;
+  float trainTrackSMetres;
+  float trackLengthMetres;
 };
 
 [[vk::push_constant]]
@@ -46,4 +48,5 @@ struct TunnelLight {
   float radiusMetres;
   float3 colour;
   float intensity;
+  float startSMetres;
 }

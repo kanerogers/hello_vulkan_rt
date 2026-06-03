@@ -67,10 +67,17 @@ void main(inout HitPayload payload,
 
   var directLight = float3(0.0);
 
-  let maxDebugLights = min(registers.lightCount, 64u);
+  let activeRangeMetres = 180.0;
 
-  for (uint lightIndex = 0; lightIndex < maxDebugLights; lightIndex++) {
+  for (uint lightIndex = 0; lightIndex < registers.lightCount; lightIndex++) {
     let light = registers.lightBuffer[lightIndex];
+
+    let rawDeltaS = abs(light.startSMetres - registers.trainTrackSMetres);
+    let wrappedDeltaS = min(rawDeltaS, registers.trackLengthMetres - rawDeltaS);
+
+    if (wrappedDeltaS > activeRangeMetres) {
+      continue;
+    }
 
     let toLight = light.position - worldPosition;
     let distanceMetres = length(toLight);

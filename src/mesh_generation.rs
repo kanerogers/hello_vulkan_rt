@@ -290,7 +290,7 @@ pub const LED_TUBE_Y_METRES: f32 = 3.52;
 pub const LED_TUBE_HALF_WIDTH_METRES: f32 = 0.09;
 pub const LED_TUBE_HALF_HEIGHT_METRES: f32 = 0.035;
 pub const LED_TUBE_LIGHT_RADIUS_METRES: f32 = 7.0;
-pub const LED_TUBE_LIGHT_INTENSITY: f32 = 6.0;
+pub const LED_TUBE_LIGHT_INTENSITY: f32 = 0.6;
 
 #[derive(Copy, Clone, Debug)]
 pub struct LedTubeFixture {

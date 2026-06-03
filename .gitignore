@@ -1,5 +1,5 @@
 /target
-.spv
+*.spv
 
 // Nsight bullshit
 imgui.ini

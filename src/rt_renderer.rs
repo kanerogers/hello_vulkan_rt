@@ -225,7 +225,7 @@ impl<'a> SubRenderer<'a> for RTRenderer {
         context: &lazy_vulkan::Context,
         layer_info: LayerInfo,
     ) {
-        let _demo = &state.demo_state;
+        let demo_state = &state.demo_state;
         let Some(rt_state) = &self.state else { return };
 
         let device = &context.device;
@@ -274,8 +274,7 @@ impl<'a> SubRenderer<'a> for RTRenderer {
             // wulkankjzk
             perspective.y_axis *= -1.0;
 
-            let view_inverse =
-                camera_view_from_train_frame(state.train_current_frame, state.demo_state);
+            let view_inverse = camera_view_from_train_frame(state.train_current_frame, demo_state);
 
             let registers = Registers {
                 view_inverse: view_inverse,
@@ -285,6 +284,8 @@ impl<'a> SubRenderer<'a> for RTRenderer {
                 frame: 0, // TODO
                 light_buffer: scene_data.light_buffer.device_address,
                 light_count: scene_data.light_buffer.len() as u32,
+                train_track_s_metres: demo_state.track_s_m,
+                track_length_metres: TRACK_LENGTH_METRES,
             };
 
             device.cmd_push_constants(
@@ -1065,6 +1066,8 @@ struct Registers {
     frame: u32,
     light_buffer: vk::DeviceAddress,
     light_count: u32,
+    train_track_s_metres: f32,
+    track_length_metres: f32,
 }
 
 unsafe impl bytemuck::Zeroable for Registers {}
@@ -1187,14 +1190,11 @@ fn create_rt_pipeline(
 #[repr(C)]
 #[derive(Copy, Clone, Debug)]
 struct TunnelLight {
-    #[allow(unused)]
     position: glam::Vec3,
-    #[allow(unused)]
     radius_metres: f32,
-    #[allow(unused)]
     colour: glam::Vec3,
-    #[allow(unused)]
     intensity: f32,
+    start_s_metres: f32,
 }
 
 unsafe impl bytemuck::Zeroable for TunnelLight {}
@@ -1218,6 +1218,7 @@ fn generate_tunnel_lights(
                 radius_metres: fixture.radius_metres,
                 colour: fixture.colour,
                 intensity: fixture.intensity,
+                start_s_metres: fixture.start_s_metres,
             }
         })
         .collect()
