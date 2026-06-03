@@ -744,7 +744,7 @@ fn create_instance(
 
                 instance_shader_binding_table_record_offset_and_flags: Packed24_8::new(
                     0,
-                    vk::GeometryInstanceFlagsKHR::TRIANGLE_FACING_CULL_DISABLE.as_raw() as _,
+                    vk::GeometryInstanceFlagsKHR::empty().as_raw() as _,
                 ),
                 acceleration_structure_reference: vk::AccelerationStructureReferenceKHR {
                     device_handle: blas_address,

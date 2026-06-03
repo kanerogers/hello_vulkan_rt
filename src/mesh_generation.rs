@@ -32,8 +32,26 @@ pub fn generate_tunnel_shell(
     length_m: f32,
     params: TunnelMeshParams,
 ) -> GeneratedMesh {
+    const BOTTOM_PROFILE_SEGMENTS: usize = 8;
+
+    assert!(
+        params.profile_segments > BOTTOM_PROFILE_SEGMENTS,
+        "tunnel shell needs enough profile segments for arch + bottom"
+    );
+
+    let arch_profile_segments = params.profile_segments - BOTTOM_PROFILE_SEGMENTS;
+
     let ring_count = (length_m / params.ring_spacing_m).ceil() as usize + 1;
     let profile_count = params.profile_segments + 1;
+
+    let arch_start_angle_rad = 210.0_f32.to_radians();
+    let arch_end_angle_rad = -30.0_f32.to_radians();
+    let arch_angle_span_rad = (arch_end_angle_rad - arch_start_angle_rad).abs();
+    let arch_length_metres = params.radius_m * arch_angle_span_rad;
+
+    let bottom_left_x_metres = params.radius_m * arch_start_angle_rad.cos();
+    let bottom_right_x_metres = params.radius_m * arch_end_angle_rad.cos();
+    let bottom_y_metres = params.centre_y_m + params.radius_m * arch_start_angle_rad.sin();
 
     let mut vertices = Vec::with_capacity(ring_count * profile_count);
     let mut indices = Vec::new();
@@ -44,28 +62,40 @@ pub fn generate_tunnel_shell(
         let frame = track.sample(s_m);
 
         for profile_index in 0..profile_count {
-            let profile_t = profile_index as f32 / params.profile_segments as f32;
+            let (position, normal, uv) = if profile_index <= arch_profile_segments {
+                let arch_t = profile_index as f32 / arch_profile_segments as f32;
+                let angle_rad = lerp(arch_start_angle_rad, arch_end_angle_rad, arch_t);
 
-            // Open lower-left to lower-right arch, looking forward.
-            // This leaves floor/track-bed geometry for the next milestone.
-            let angle_rad = lerp(210.0_f32.to_radians(), -30.0_f32.to_radians(), profile_t);
+                let local_x_metres = params.radius_m * angle_rad.cos();
+                let local_y_metres = params.centre_y_m + params.radius_m * angle_rad.sin();
 
-            let local_x_m = params.radius_m * angle_rad.cos();
-            let local_y_m = params.centre_y_m + params.radius_m * angle_rad.sin();
+                let position =
+                    frame.origin + frame.right * local_x_metres + frame.up * local_y_metres;
 
-            let position = frame.origin + frame.right * local_x_m + frame.up * local_y_m;
+                let profile_outward =
+                    glam::vec2(local_x_metres, local_y_metres - params.centre_y_m).normalize();
 
-            // Inward-facing analytic normal.
-            // At the crown this points down into the tunnel, not outward into rock.
-            let profile_outward = glam::vec2(local_x_m, local_y_m - params.centre_y_m).normalize();
+                let normal =
+                    (-frame.right * profile_outward.x - frame.up * profile_outward.y).normalize();
 
-            let normal =
-                (-frame.right * profile_outward.x - frame.up * profile_outward.y).normalize();
+                let uv = glam::vec2(arch_length_metres * arch_t, s_m);
 
-            // UVs are in metres for now:
-            // u = distance around arch, v = distance along track.
-            let arch_length_m = params.radius_m * (240.0_f32.to_radians()) * profile_t;
-            let uv = glam::vec2(arch_length_m, s_m);
+                (position, normal, uv)
+            } else {
+                let bottom_index = profile_index - arch_profile_segments;
+                let bottom_t = bottom_index as f32 / BOTTOM_PROFILE_SEGMENTS as f32;
+
+                let local_x_metres = lerp(bottom_right_x_metres, bottom_left_x_metres, bottom_t);
+                let local_y_metres = bottom_y_metres;
+
+                let position =
+                    frame.origin + frame.right * local_x_metres + frame.up * local_y_metres;
+
+                let bottom_distance_metres = (bottom_right_x_metres - local_x_metres).abs();
+                let uv = glam::vec2(arch_length_metres + bottom_distance_metres, s_m);
+
+                (position, frame.up, uv)
+            };
 
             vertices.push(Vertex::new(position, normal, Some(uv)));
         }
