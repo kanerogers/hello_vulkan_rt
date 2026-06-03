@@ -1,9 +1,6 @@
 import common;
 import sampling;
 
-[[vk::binding(0, 0)]]
-RaytracingAccelerationStructure tlas;
-
 [[vk::binding(1, 0)]]
 [vk::image_format("rgba16f")]
 RWTexture2D<float4> image;
@@ -43,7 +40,8 @@ void main() {
     ray.Direction = payload.rayDirection;
     ray.TMax = 10000.0;
 
-    TraceRay(tlas, RAY_FLAG_FORCE_OPAQUE, 0xFF, 0, 0, 0, ray, payload);
+    TraceRay(tlas, RAY_FLAG_FORCE_OPAQUE, 0xFF, RAY_TYPE_RADIANCE,
+             RAY_TYPE_COUNT, MISS_TYPE_RADIANCE, ray, payload);
 
     hitValue += payload.hitValue * curWeight;
     curWeight *= payload.weight;

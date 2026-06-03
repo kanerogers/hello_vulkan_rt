@@ -21,7 +21,9 @@ pub fn compile_shaders() {
     const SHADERS: &[(&str, &str)] = &[
         ("shaders/raygen.slang", "shaders/raygen.rgen.spv"),
         ("shaders/miss.slang", "shaders/miss.rmiss.spv"),
+        ("shaders/shadowmiss.slang", "shaders/shadowmiss.rmiss.spv"),
         ("shaders/closesthit.slang", "shaders/closesthit.rchit.spv"),
+        ("shaders/shadowhit.slang", "shaders/shadowhit.rchit.spv"),
         ("shaders/fullscreen.slang", "shaders/fullscreen.vert.spv"),
         ("shaders/tonemapping.slang", "shaders/tonemapping.frag.spv"),
     ];

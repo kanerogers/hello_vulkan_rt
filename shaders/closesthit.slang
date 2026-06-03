@@ -67,7 +67,7 @@ void main(inout HitPayload payload,
 
   var directLight = float3(0.0);
 
-  let activeRangeMetres = 480.0;
+  let activeRangeMetres = 240.0;
 
   for (uint lightIndex = 0; lightIndex < registers.lightCount; lightIndex++) {
     let light = registers.lightBuffer[lightIndex];
@@ -87,6 +87,24 @@ void main(inout HitPayload payload,
 
     let radiusFade = saturate(1.0 - distanceMetres / light.radiusMetres);
     let attenuation = radiusFade * radiusFade;
+
+    RayDesc shadowRay;
+    shadowRay.Origin = worldPosition + worldNormal * 0.01;
+    shadowRay.TMin = 0.001;
+    shadowRay.Direction = lightDir;
+    shadowRay.TMax = max(distanceMetres - 0.02, 0.001);
+
+    ShadowPayload shadowPayload;
+    shadowPayload.hit = false;
+
+    TraceRay(tlas,
+             RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH | RAY_FLAG_FORCE_OPAQUE,
+             0xFF, RAY_TYPE_SHADOW, RAY_TYPE_COUNT, MISS_TYPE_SHADOW, shadowRay,
+             shadowPayload);
+
+    if (shadowPayload.hit) {
+      continue;
+    }
 
     directLight += light.colour * light.intensity * ndotl * attenuation;
   }

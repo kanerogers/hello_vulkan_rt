@@ -1,3 +1,9 @@
+[[vk::push_constant]]
+ConstantBuffer<Registers, ScalarDataLayout> registers;
+
+[[vk::binding(0, 0)]]
+RaytracingAccelerationStructure tlas;
+
 struct Vertex {
   float3 position;
   float3 normal;
@@ -31,9 +37,6 @@ struct Registers {
   float trackLengthMetres;
 };
 
-[[vk::push_constant]]
-ConstantBuffer<Registers, ScalarDataLayout> registers;
-
 struct HitPayload {
   float3 hitValue;
   uint seed;
@@ -43,6 +46,10 @@ struct HitPayload {
   float3 weight;
 };
 
+struct ShadowPayload {
+  bool hit;
+}
+
 struct TunnelLight {
   float3 position;
   float radiusMetres;
@@ -50,3 +57,10 @@ struct TunnelLight {
   float intensity;
   float startSMetres;
 }
+
+static const uint RAY_TYPE_RADIANCE = 0;
+static const uint RAY_TYPE_SHADOW = 1;
+static const uint RAY_TYPE_COUNT = 2;
+
+static const uint MISS_TYPE_RADIANCE = 0;
+static const uint MISS_TYPE_SHADOW = 1;

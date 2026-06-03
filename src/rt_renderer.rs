@@ -18,11 +18,19 @@ use crate::{
     track::{Track, TrackFrame},
 };
 
-static CLOSEST_SHADER_PATH: &'static str = "shaders/closesthit.rchit.spv";
+static CLOSEST_HIT_SHADER_PATH: &'static str = "shaders/closesthit.rchit.spv";
+static SHADOW_HIT_SHADER_PATH: &'static str = "shaders/shadowhit.rchit.spv";
 static MISS_SHADER_PATH: &'static str = "shaders/miss.rmiss.spv";
+static SHADOW_MISS_SHADER_PATH: &'static str = "shaders/shadowmiss.rmiss.spv";
 static RAYGEN_SHADER_PATH: &'static str = "shaders/raygen.rgen.spv";
 static TONEMAPPING_SHADER_PATH: &'static str = "shaders/tonemapping.frag.spv";
 static FULLSCREEN_SHADER_PATH: &'static str = "shaders/fullscreen.vert.spv";
+
+const RAYGEN_INDEX: u32 = 0;
+const MISS_INDEX: u32 = 1;
+const SHADOW_MISS_INDEX: u32 = 2;
+const CLOSEST_HIT_INDEX: u32 = 3;
+const SHADOW_HIT_INDEX: u32 = 4;
 
 pub struct RTRenderer {
     context: Arc<lazy_vulkan::Context>,
@@ -129,19 +137,9 @@ impl RTRenderer {
         }
         .unwrap();
 
-        let raygen_index = 0;
-        let miss_index = 1;
-        let closest_hit_index = 2;
-
         let context = &renderer.context;
 
-        let pipeline = create_rt_pipeline(
-            pipeline_layout,
-            raygen_index,
-            miss_index,
-            closest_hit_index,
-            context,
-        );
+        let pipeline = create_rt_pipeline(pipeline_layout, context);
 
         let tonemapping_pipeline = renderer.create_pipeline_with_options::<TonemappingRegisters>(
             &r(FULLSCREEN_SHADER_PATH),
@@ -950,8 +948,8 @@ impl SBT {
         allocator: &mut lazy_vulkan::Allocator,
         pipeline: vk::Pipeline,
     ) -> SBT {
-        let miss_count = 1;
-        let hit_count = 1;
+        let miss_count = 2;
+        let hit_count = 2;
         let handle_count = 1 + miss_count + hit_count;
         let raytracing_properties = &context.raytracing_properties;
         let handle_size = raytracing_properties.shader_group_handle_size;
@@ -1002,15 +1000,24 @@ impl SBT {
         let sbt_size = gen_region.size + miss_region.size + hit_region.size + call_region.size;
         let mut sbt_data = vec![0; sbt_size as usize];
 
-        let mut offset = 0;
-        sbt_data[offset..handle_size as usize].copy_from_slice(&handles[..handle_size as usize]);
-        offset += gen_region.size as usize;
-        sbt_data[offset..offset + handle_size as usize]
-            .copy_from_slice(&handles[handle_size as usize..(handle_size as usize) * 2]);
+        let handle_size_usize = handle_size as usize;
 
-        offset += miss_region.size as usize;
-        sbt_data[offset..offset + handle_size as usize]
-            .copy_from_slice(&handles[(handle_size as usize * 2)..(handle_size as usize) * 3]);
+        let mut copy_group = |dst_offset: usize, group_index: usize| {
+            let src_offset = group_index * handle_size_usize;
+
+            sbt_data[dst_offset..dst_offset + handle_size_usize]
+                .copy_from_slice(&handles[src_offset..src_offset + handle_size_usize]);
+        };
+
+        copy_group(0, 0);
+
+        let miss_offset = gen_region.size as usize;
+        copy_group(miss_offset, 1);
+        copy_group(miss_offset + miss_region.stride as usize, 2);
+
+        let hit_offset = miss_offset + miss_region.size as usize;
+        copy_group(hit_offset, 3);
+        copy_group(hit_offset + hit_region.stride as usize, 4);
 
         let mut sbt_buffer = allocator.allocate_buffer::<u8>(
             sbt_size as usize,
@@ -1132,9 +1139,6 @@ fn camera_view_from_train_frame(train_frame: TrackFrame, demo_state: &DemoState)
 
 fn create_rt_pipeline(
     pipeline_layout: vk::PipelineLayout,
-    raygen_index: u32,
-    miss_index: u32,
-    closest_hit_index: u32,
     context: &Arc<lazy_vulkan::Context>,
 ) -> vk::Pipeline {
     let pipeline = unsafe {
@@ -1150,17 +1154,29 @@ fn create_rt_pipeline(
                             .any_hit_shader(vk::SHADER_UNUSED_KHR)
                             .closest_hit_shader(vk::SHADER_UNUSED_KHR)
                             .intersection_shader(vk::SHADER_UNUSED_KHR)
-                            .general_shader(raygen_index),
+                            .general_shader(RAYGEN_INDEX),
                         vk::RayTracingShaderGroupCreateInfoKHR::default()
                             .ty(vk::RayTracingShaderGroupTypeKHR::GENERAL)
                             .any_hit_shader(vk::SHADER_UNUSED_KHR)
                             .closest_hit_shader(vk::SHADER_UNUSED_KHR)
                             .intersection_shader(vk::SHADER_UNUSED_KHR)
-                            .general_shader(miss_index),
+                            .general_shader(MISS_INDEX),
+                        vk::RayTracingShaderGroupCreateInfoKHR::default()
+                            .ty(vk::RayTracingShaderGroupTypeKHR::GENERAL)
+                            .any_hit_shader(vk::SHADER_UNUSED_KHR)
+                            .closest_hit_shader(vk::SHADER_UNUSED_KHR)
+                            .intersection_shader(vk::SHADER_UNUSED_KHR)
+                            .general_shader(SHADOW_MISS_INDEX),
                         vk::RayTracingShaderGroupCreateInfoKHR::default()
                             .ty(vk::RayTracingShaderGroupTypeKHR::TRIANGLES_HIT_GROUP)
                             .any_hit_shader(vk::SHADER_UNUSED_KHR)
-                            .closest_hit_shader(closest_hit_index)
+                            .closest_hit_shader(CLOSEST_HIT_INDEX)
+                            .intersection_shader(vk::SHADER_UNUSED_KHR)
+                            .general_shader(vk::SHADER_UNUSED_KHR),
+                        vk::RayTracingShaderGroupCreateInfoKHR::default()
+                            .ty(vk::RayTracingShaderGroupTypeKHR::TRIANGLES_HIT_GROUP)
+                            .any_hit_shader(vk::SHADER_UNUSED_KHR)
+                            .closest_hit_shader(SHADOW_HIT_INDEX)
                             .intersection_shader(vk::SHADER_UNUSED_KHR)
                             .general_shader(vk::SHADER_UNUSED_KHR),
                     ])
@@ -1174,10 +1190,28 @@ fn create_rt_pipeline(
                             .name(c"main")
                             .module(lazy_vulkan::load_module(&r(MISS_SHADER_PATH), context)),
                         vk::PipelineShaderStageCreateInfo::default()
+                            .stage(vk::ShaderStageFlags::MISS_KHR)
+                            .name(c"main")
+                            .module(lazy_vulkan::load_module(
+                                &r(SHADOW_MISS_SHADER_PATH),
+                                context,
+                            )),
+                        vk::PipelineShaderStageCreateInfo::default()
                             .stage(vk::ShaderStageFlags::CLOSEST_HIT_KHR)
                             .name(c"main")
-                            .module(lazy_vulkan::load_module(&r(CLOSEST_SHADER_PATH), context)),
+                            .module(lazy_vulkan::load_module(
+                                &r(CLOSEST_HIT_SHADER_PATH),
+                                context,
+                            )),
+                        vk::PipelineShaderStageCreateInfo::default()
+                            .stage(vk::ShaderStageFlags::CLOSEST_HIT_KHR)
+                            .name(c"main")
+                            .module(lazy_vulkan::load_module(
+                                &r(SHADOW_HIT_SHADER_PATH),
+                                context,
+                            )),
                     ])
+                    .max_pipeline_ray_recursion_depth(2)
                     .layout(pipeline_layout)],
                 None,
             )
