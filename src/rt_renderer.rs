@@ -11,8 +11,9 @@ use crate::{
     demo_state::{DemoState, TRACK_LENGTH_METRES},
     graphics::{RenderState, RenderStateFamily},
     mesh_generation::{
-        self, TUNNEL_BAY_LENGTH_METRES, generate_cable_tray, generate_led_tubes, generate_rails,
-        generate_service_walkway, generate_slab_bed, generate_tunnel_shell,
+        self, TUNNEL_BAY_LENGTH_METRES, generate_cable_tray, generate_led_tube_fixtures,
+        generate_led_tubes, generate_rails, generate_service_walkway, generate_slab_bed,
+        generate_tunnel_shell,
     },
     track::{Track, TrackFrame},
 };
@@ -450,7 +451,8 @@ impl SceneData {
         );
 
         // Generate the LED tubes
-        let led_tube_mesh = generate_led_tubes(track, 0.0, TRACK_LENGTH_METRES);
+        let led_tube_fixtures = generate_led_tube_fixtures(TRACK_LENGTH_METRES);
+        let led_tube_mesh = generate_led_tubes(track, &led_tube_fixtures);
         let led_tubes = create_scene_primitive_with_emission(
             renderer,
             &mut vertex_buffer,

@@ -284,41 +284,73 @@ pub fn generate_cable_tray(track: &Track, start_s_m: f32, length_m: f32) -> Gene
     GeneratedMesh { vertices, indices }
 }
 
-pub fn generate_led_tubes(track: &Track, start_s_m: f32, length_m: f32) -> GeneratedMesh {
-    let spacing_m = TUNNEL_BAY_LENGTH_METRES;
-    let tube_length_m = 4.0;
+pub const LED_TUBE_LENGTH_METRES: f32 = 4.0;
+pub const LED_TUBE_X_METRES: f32 = 0.0;
+pub const LED_TUBE_Y_METRES: f32 = 3.52;
+pub const LED_TUBE_HALF_WIDTH_METRES: f32 = 0.09;
+pub const LED_TUBE_HALF_HEIGHT_METRES: f32 = 0.035;
+pub const LED_TUBE_LIGHT_RADIUS_METRES: f32 = 7.0;
+pub const LED_TUBE_LIGHT_INTENSITY: f32 = 6.0;
 
-    let center_x_m = 0.0;
-    let center_y_m = 3.52;
-    let half_width_m = 0.09;
-    let half_height_m = 0.035;
+#[derive(Copy, Clone, Debug)]
+pub struct LedTubeFixture {
+    pub start_s_metres: f32,
+    pub length_metres: f32,
+    pub x_metres: f32,
+    pub y_metres: f32,
+    pub half_width_metres: f32,
+    pub half_height_metres: f32,
+    #[allow(unused)]
+    pub colour: glam::Vec3,
+    #[allow(unused)]
+    pub intensity: f32,
+    #[allow(unused)]
+    pub radius_metres: f32,
+}
 
-    let fixture_count = (length_m / spacing_m).floor() as usize;
+pub fn generate_led_tube_fixtures(track_length_metres: f32) -> Vec<LedTubeFixture> {
+    let fixture_count = (track_length_metres / TUNNEL_BAY_LENGTH_METRES).floor() as usize;
 
-    let mut vertices = Vec::with_capacity(fixture_count * 8);
-    let mut indices = Vec::with_capacity(fixture_count * 24);
+    (0..fixture_count)
+        .map(|fixture_index| LedTubeFixture {
+            start_s_metres: fixture_index as f32 * TUNNEL_BAY_LENGTH_METRES,
+            length_metres: LED_TUBE_LENGTH_METRES,
+            x_metres: LED_TUBE_X_METRES,
+            y_metres: LED_TUBE_Y_METRES,
+            half_width_metres: LED_TUBE_HALF_WIDTH_METRES,
+            half_height_metres: LED_TUBE_HALF_HEIGHT_METRES,
+            colour: glam::vec3(0.65, 0.82, 1.0),
+            intensity: LED_TUBE_LIGHT_INTENSITY,
+            radius_metres: LED_TUBE_LIGHT_RADIUS_METRES,
+        })
+        .collect()
+}
 
-    for fixture_index in 0..fixture_count {
-        let fixture_start_s_m = start_s_m + fixture_index as f32 * spacing_m;
-        let fixture_end_s_m = fixture_start_s_m + tube_length_m;
+pub fn generate_led_tubes(track: &Track, fixtures: &[LedTubeFixture]) -> GeneratedMesh {
+    let mut vertices = Vec::with_capacity(fixtures.len() * 8);
+    let mut indices = Vec::with_capacity(fixtures.len() * 24);
 
-        let frame0 = track.sample(fixture_start_s_m);
-        let frame1 = track.sample(fixture_end_s_m);
+    for fixture in fixtures {
+        let fixture_start_s_metres = fixture.start_s_metres;
+        let fixture_end_s_metres = fixture.start_s_metres + fixture.length_metres;
+
+        let frame0 = track.sample(fixture_start_s_metres);
+        let frame1 = track.sample(fixture_end_s_metres);
 
         let base = vertices.len() as u32;
 
         let corners = [
-            (-half_width_m, -half_height_m),
-            (half_width_m, -half_height_m),
-            (half_width_m, half_height_m),
-            (-half_width_m, half_height_m),
+            (-fixture.half_width_metres, -fixture.half_height_metres),
+            (fixture.half_width_metres, -fixture.half_height_metres),
+            (fixture.half_width_metres, fixture.half_height_metres),
+            (-fixture.half_width_metres, fixture.half_height_metres),
         ];
 
         for frame in [frame0, frame1] {
-            for (corner_index, (dx_m, dy_m)) in corners.into_iter().enumerate() {
+            for (corner_index, (dx_metres, dy_metres)) in corners.into_iter().enumerate() {
                 let position = frame.origin
-                    + frame.right * (center_x_m + dx_m)
-                    + frame.up * (center_y_m + dy_m);
+                    + frame.right * (fixture.x_metres + dx_metres)
+                    + frame.up * (fixture.y_metres + dy_metres);
 
                 let normal = match corner_index {
                     0 => (-frame.right - frame.up).normalize(),
@@ -327,7 +359,7 @@ pub fn generate_led_tubes(track: &Track, start_s_m: f32, length_m: f32) -> Gener
                     _ => (-frame.right + frame.up).normalize(),
                 };
 
-                let uv = glam::vec2(corner_index as f32, fixture_start_s_m);
+                let uv = glam::vec2(corner_index as f32, fixture_start_s_metres);
                 vertices.push(Vertex::new(position, normal, Some(uv)));
             }
         }
