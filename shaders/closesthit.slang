@@ -67,7 +67,7 @@ void main(inout HitPayload payload,
 
   var directLight = float3(0.0);
 
-  let activeRangeMetres = 180.0;
+  let activeRangeMetres = 480.0;
 
   for (uint lightIndex = 0; lightIndex < registers.lightCount; lightIndex++) {
     let light = registers.lightBuffer[lightIndex];
