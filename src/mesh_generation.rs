@@ -423,6 +423,211 @@ pub fn generate_led_tubes(track: &Track, fixtures: &[LedTubeFixture]) -> Generat
     GeneratedMesh { vertices, indices }
 }
 
+pub fn generate_shadow_debug_blockers(track: &Track) -> GeneratedMesh {
+    const BLOCKER_HALF_WIDTH_METRES: f32 = 0.75;
+    const BLOCKER_HALF_HEIGHT_METRES: f32 = 0.50;
+    const BLOCKER_HALF_DEPTH_METRES: f32 = 0.75;
+
+    // Centre of cuboid, in track space.
+    // y=0.5m puts it floating just above the track/slab area.
+    const BLOCKER_X_METRES: f32 = 0.0;
+    const BLOCKER_Y_METRES: f32 = 0.50;
+
+    let blocker_s_metres = [25.0, 55.0, 80.0, 125.0, 170.0];
+
+    let mut vertices = Vec::with_capacity(blocker_s_metres.len() * 24);
+    let mut indices = Vec::with_capacity(blocker_s_metres.len() * 36);
+
+    for s_metres in blocker_s_metres {
+        let frame = track.sample(s_metres);
+        let base = vertices.len() as u32;
+
+        let mut push_vertex =
+            |x_metres: f32, y_metres: f32, z_metres: f32, normal: glam::Vec3, uv: glam::Vec2| {
+                let position = frame.origin
+                    + frame.right * (BLOCKER_X_METRES + x_metres)
+                    + frame.up * (BLOCKER_Y_METRES + y_metres)
+                    + frame.forward * z_metres;
+
+                vertices.push(Vertex::new(position, normal, Some(uv)));
+            };
+
+        let faces = [
+            // normal, four corners
+            (
+                -frame.forward,
+                [
+                    (
+                        -BLOCKER_HALF_WIDTH_METRES,
+                        -BLOCKER_HALF_HEIGHT_METRES,
+                        -BLOCKER_HALF_DEPTH_METRES,
+                    ),
+                    (
+                        -BLOCKER_HALF_WIDTH_METRES,
+                        BLOCKER_HALF_HEIGHT_METRES,
+                        -BLOCKER_HALF_DEPTH_METRES,
+                    ),
+                    (
+                        BLOCKER_HALF_WIDTH_METRES,
+                        BLOCKER_HALF_HEIGHT_METRES,
+                        -BLOCKER_HALF_DEPTH_METRES,
+                    ),
+                    (
+                        BLOCKER_HALF_WIDTH_METRES,
+                        -BLOCKER_HALF_HEIGHT_METRES,
+                        -BLOCKER_HALF_DEPTH_METRES,
+                    ),
+                ],
+            ),
+            (
+                frame.forward,
+                [
+                    (
+                        -BLOCKER_HALF_WIDTH_METRES,
+                        -BLOCKER_HALF_HEIGHT_METRES,
+                        BLOCKER_HALF_DEPTH_METRES,
+                    ),
+                    (
+                        BLOCKER_HALF_WIDTH_METRES,
+                        -BLOCKER_HALF_HEIGHT_METRES,
+                        BLOCKER_HALF_DEPTH_METRES,
+                    ),
+                    (
+                        BLOCKER_HALF_WIDTH_METRES,
+                        BLOCKER_HALF_HEIGHT_METRES,
+                        BLOCKER_HALF_DEPTH_METRES,
+                    ),
+                    (
+                        -BLOCKER_HALF_WIDTH_METRES,
+                        BLOCKER_HALF_HEIGHT_METRES,
+                        BLOCKER_HALF_DEPTH_METRES,
+                    ),
+                ],
+            ),
+            (
+                -frame.right,
+                [
+                    (
+                        -BLOCKER_HALF_WIDTH_METRES,
+                        -BLOCKER_HALF_HEIGHT_METRES,
+                        -BLOCKER_HALF_DEPTH_METRES,
+                    ),
+                    (
+                        -BLOCKER_HALF_WIDTH_METRES,
+                        -BLOCKER_HALF_HEIGHT_METRES,
+                        BLOCKER_HALF_DEPTH_METRES,
+                    ),
+                    (
+                        -BLOCKER_HALF_WIDTH_METRES,
+                        BLOCKER_HALF_HEIGHT_METRES,
+                        BLOCKER_HALF_DEPTH_METRES,
+                    ),
+                    (
+                        -BLOCKER_HALF_WIDTH_METRES,
+                        BLOCKER_HALF_HEIGHT_METRES,
+                        -BLOCKER_HALF_DEPTH_METRES,
+                    ),
+                ],
+            ),
+            (
+                frame.right,
+                [
+                    (
+                        BLOCKER_HALF_WIDTH_METRES,
+                        -BLOCKER_HALF_HEIGHT_METRES,
+                        -BLOCKER_HALF_DEPTH_METRES,
+                    ),
+                    (
+                        BLOCKER_HALF_WIDTH_METRES,
+                        BLOCKER_HALF_HEIGHT_METRES,
+                        -BLOCKER_HALF_DEPTH_METRES,
+                    ),
+                    (
+                        BLOCKER_HALF_WIDTH_METRES,
+                        BLOCKER_HALF_HEIGHT_METRES,
+                        BLOCKER_HALF_DEPTH_METRES,
+                    ),
+                    (
+                        BLOCKER_HALF_WIDTH_METRES,
+                        -BLOCKER_HALF_HEIGHT_METRES,
+                        BLOCKER_HALF_DEPTH_METRES,
+                    ),
+                ],
+            ),
+            (
+                frame.up,
+                [
+                    (
+                        -BLOCKER_HALF_WIDTH_METRES,
+                        BLOCKER_HALF_HEIGHT_METRES,
+                        -BLOCKER_HALF_DEPTH_METRES,
+                    ),
+                    (
+                        -BLOCKER_HALF_WIDTH_METRES,
+                        BLOCKER_HALF_HEIGHT_METRES,
+                        BLOCKER_HALF_DEPTH_METRES,
+                    ),
+                    (
+                        BLOCKER_HALF_WIDTH_METRES,
+                        BLOCKER_HALF_HEIGHT_METRES,
+                        BLOCKER_HALF_DEPTH_METRES,
+                    ),
+                    (
+                        BLOCKER_HALF_WIDTH_METRES,
+                        BLOCKER_HALF_HEIGHT_METRES,
+                        -BLOCKER_HALF_DEPTH_METRES,
+                    ),
+                ],
+            ),
+            (
+                -frame.up,
+                [
+                    (
+                        -BLOCKER_HALF_WIDTH_METRES,
+                        -BLOCKER_HALF_HEIGHT_METRES,
+                        -BLOCKER_HALF_DEPTH_METRES,
+                    ),
+                    (
+                        BLOCKER_HALF_WIDTH_METRES,
+                        -BLOCKER_HALF_HEIGHT_METRES,
+                        -BLOCKER_HALF_DEPTH_METRES,
+                    ),
+                    (
+                        BLOCKER_HALF_WIDTH_METRES,
+                        -BLOCKER_HALF_HEIGHT_METRES,
+                        BLOCKER_HALF_DEPTH_METRES,
+                    ),
+                    (
+                        -BLOCKER_HALF_WIDTH_METRES,
+                        -BLOCKER_HALF_HEIGHT_METRES,
+                        BLOCKER_HALF_DEPTH_METRES,
+                    ),
+                ],
+            ),
+        ];
+
+        for (face_index, (normal, corners)) in faces.into_iter().enumerate() {
+            let face_base = base + face_index as u32 * 4;
+
+            for (corner_index, (x_metres, y_metres, z_metres)) in corners.into_iter().enumerate() {
+                let uv = glam::vec2(corner_index as f32, face_index as f32);
+                push_vertex(x_metres, y_metres, z_metres, normal, uv);
+            }
+
+            indices.extend_from_slice(&[
+                face_base,
+                face_base + 1,
+                face_base + 2,
+                face_base,
+                face_base + 2,
+                face_base + 3,
+            ]);
+        }
+    }
+
+    GeneratedMesh { vertices, indices }
+}
+
 fn lerp(a: f32, b: f32, t: f32) -> f32 {
     a + (b - a) * t
 }

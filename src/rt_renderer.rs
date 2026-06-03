@@ -12,8 +12,8 @@ use crate::{
     graphics::{RenderState, RenderStateFamily},
     mesh_generation::{
         self, TUNNEL_BAY_LENGTH_METRES, generate_cable_tray, generate_led_tube_fixtures,
-        generate_led_tubes, generate_rails, generate_service_walkway, generate_slab_bed,
-        generate_tunnel_shell,
+        generate_led_tubes, generate_rails, generate_service_walkway,
+        generate_shadow_debug_blockers, generate_slab_bed, generate_tunnel_shell,
     },
     track::{Track, TrackFrame},
 };
@@ -470,6 +470,15 @@ impl SceneData {
             glam::vec3(0.65, 0.85, 1.0),
         );
 
+        let blocker_mesh = generate_shadow_debug_blockers(track);
+        let blocker = create_scene_primitive(
+            renderer,
+            &mut vertex_buffer,
+            &mut index_buffer,
+            blocker_mesh,
+            glam::vec4(0.05, 0.05, 0.07, 1.0),
+        );
+
         // Gather our scene primitives
         let scene_primitives = vec![
             tunnel,
@@ -478,6 +487,7 @@ impl SceneData {
             service_walkway,
             cable_tray,
             led_tubes,
+            blocker,
         ];
 
         // Append the data to our primitive buffer
@@ -565,9 +575,9 @@ fn create_scene_primitive_with_emission(
     emissive_colour_factor: glam::Vec3,
 ) -> ScenePrimitive {
     // Upload mesh to buffer
-    let tunnel_indices = index_buffer.tip_address();
+    let indices = index_buffer.tip_address();
     index_buffer.append(&mesh.indices, &mut renderer.allocator);
-    let tunnel_vertices = vertex_buffer.tip_address();
+    let vertices = vertex_buffer.tip_address();
     vertex_buffer.append(&mesh.vertices, &mut renderer.allocator);
 
     let no_texture: TextureID = NO_TEXTURE.into();
@@ -586,8 +596,8 @@ fn create_scene_primitive_with_emission(
         }]);
 
     ScenePrimitive {
-        indices: tunnel_indices,
-        vertices: tunnel_vertices,
+        indices,
+        vertices,
         index_count: mesh.indices.len() as u32,
         vertex_count: mesh.vertices.len() as u32,
         material: material.device_address,

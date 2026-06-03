@@ -52,8 +52,13 @@ void main(inout HitPayload payload,
 
   let baseAlbedo = saturate(material.baseColourFactor.rgb);
 
-  let panelPhase = frac(uv.y / registers.tunnelBayLengthMetres);
-  let panelBand = panelPhase < 0.0100 ? 0.05 : 1.0;
+  var panelBand = 1.;
+
+  if (InstanceIndex() == 0) {
+    let panelPhase = frac(uv.y / registers.tunnelBayLengthMetres);
+    panelBand = panelPhase < 0.0100 ? 0.05 : 1.0;
+  }
+
   let albedo = saturate(baseAlbedo * panelBand);
 
   float3 brdf = albedo / M_PI;
@@ -63,11 +68,11 @@ void main(inout HitPayload payload,
   // payload.hitValue = emittance;
   // payload.weight = brdf * cosTheta / p;
 
-  let emissive = material.emissiveColourFactor;
+  let emissive = material.emissiveColourFactor * 10.;
 
   var directLight = float3(0.0);
 
-  let activeRangeMetres = 240.0;
+  let activeRangeMetres = 80.0;
 
   for (uint lightIndex = 0; lightIndex < registers.lightCount; lightIndex++) {
     let light = registers.lightBuffer[lightIndex];
@@ -90,9 +95,9 @@ void main(inout HitPayload payload,
 
     RayDesc shadowRay;
     shadowRay.Origin = worldPosition + worldNormal * 0.01;
-    shadowRay.TMin = 0.001;
     shadowRay.Direction = lightDir;
-    shadowRay.TMax = max(distanceMetres - 0.02, 0.001);
+    shadowRay.TMin = 0.001;
+    shadowRay.TMax = max(distanceMetres - 1.0, 0.001);
 
     ShadowPayload shadowPayload;
     shadowPayload.hit = false;
