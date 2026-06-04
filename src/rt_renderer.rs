@@ -12,8 +12,8 @@ use crate::{
     graphics::{RenderState, RenderStateFamily},
     mesh_generation::{
         self, TUNNEL_BAY_LENGTH_METRES, generate_cable_tray, generate_led_tube_fixtures,
-        generate_led_tubes, generate_rails, generate_service_walkway,
-        generate_shadow_debug_blockers, generate_slab_bed, generate_tunnel_shell,
+        generate_led_tubes, generate_lower_strip_fixtures, generate_lower_strip_lights,
+        generate_rails, generate_service_walkway, generate_slab_bed, generate_tunnel_shell,
     },
     track::{Track, TrackFrame},
 };
@@ -385,13 +385,13 @@ impl SceneData {
     pub fn new(renderer: &mut lazy_vulkan::Renderer<RenderStateFamily>, track: &Track) -> Self {
         // Create our buffers
         let mut vertex_buffer = renderer.allocator.allocate_buffer(
-            10 * 1024 * 1024,
+            20 * 1024 * 1024,
             vk::BufferUsageFlags::ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_KHR
                 | vk::BufferUsageFlags::STORAGE_BUFFER,
         );
 
         let mut index_buffer = renderer.allocator.allocate_buffer(
-            1024 * 1024,
+            10 * 1024 * 1024,
             vk::BufferUsageFlags::ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_KHR
                 | vk::BufferUsageFlags::STORAGE_BUFFER,
         );
@@ -465,16 +465,27 @@ impl SceneData {
             &mut index_buffer,
             led_tube_mesh,
             glam::vec4(0.82, 0.90, 1.0, 1.0),
-            glam::vec3(0.65, 0.85, 1.0),
+            glam::vec3(0.65, 0.85, 1.0) * 2.0,
         );
 
-        let blocker_mesh = generate_shadow_debug_blockers(track);
-        let blocker = create_scene_primitive(
+        // let blocker_mesh = generate_shadow_debug_blockers(track);
+        // let blockers = create_scene_primitive(
+        //     renderer,
+        //     &mut vertex_buffer,
+        //     &mut index_buffer,
+        //     blocker_mesh,
+        //     glam::vec4(0.05, 0.05, 0.07, 1.0),
+        // );
+
+        let lower_strip_fixtures = generate_lower_strip_fixtures(TRACK_LENGTH_METRES);
+        let lower_strip_mesh = generate_lower_strip_lights(track, &lower_strip_fixtures);
+        let lower_strips = create_scene_primitive_with_emission(
             renderer,
             &mut vertex_buffer,
             &mut index_buffer,
-            blocker_mesh,
-            glam::vec4(0.05, 0.05, 0.07, 1.0),
+            lower_strip_mesh,
+            glam::vec4(0.18, 0.35, 1.0, 1.0),
+            glam::vec3(0.15, 0.35, 1.0),
         );
 
         // Gather our scene primitives
@@ -485,7 +496,7 @@ impl SceneData {
             service_walkway,
             cable_tray,
             led_tubes,
-            blocker,
+            lower_strips,
         ];
 
         // Append the data to our primitive buffer

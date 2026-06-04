@@ -209,14 +209,13 @@ pub fn generate_rails(track: &Track, start_s_m: f32, length_m: f32) -> Generated
     GeneratedMesh { vertices, indices }
 }
 
+pub const SERVICE_WALKWAY_INNER_X_METRES: f32 = 2.05;
+pub const SERVICE_WALKWAY_OUTER_X_METRES: f32 = 3.05;
+pub const SERVICE_WALKWAY_TOP_Y_METRES: f32 = -0.78;
+pub const SERVICE_WALKWAY_BOTTOM_Y_METRES: f32 = -1.08;
+
 pub fn generate_service_walkway(track: &Track, start_s_m: f32, length_m: f32) -> GeneratedMesh {
     let ring_spacing_m = 2.0;
-
-    // Right side of tunnel, in track space.
-    let inner_x_m = 2.05;
-    let outer_x_m = 3.05;
-    let top_y_m = -0.78;
-    let bottom_y_m = -1.08;
 
     let ring_count = (length_m / ring_spacing_m).ceil() as usize + 1;
     let verts_per_ring = 4;
@@ -230,10 +229,26 @@ pub fn generate_service_walkway(track: &Track, start_s_m: f32, length_m: f32) ->
         let frame = track.sample(s_m);
 
         let corners = [
-            (inner_x_m, top_y_m, frame.up),
-            (outer_x_m, top_y_m, frame.up),
-            (outer_x_m, bottom_y_m, frame.right),
-            (inner_x_m, bottom_y_m, -frame.right),
+            (
+                SERVICE_WALKWAY_INNER_X_METRES,
+                SERVICE_WALKWAY_TOP_Y_METRES,
+                frame.up,
+            ),
+            (
+                SERVICE_WALKWAY_OUTER_X_METRES,
+                SERVICE_WALKWAY_TOP_Y_METRES,
+                frame.up,
+            ),
+            (
+                SERVICE_WALKWAY_OUTER_X_METRES,
+                SERVICE_WALKWAY_BOTTOM_Y_METRES,
+                frame.right,
+            ),
+            (
+                SERVICE_WALKWAY_INNER_X_METRES,
+                SERVICE_WALKWAY_BOTTOM_Y_METRES,
+                -frame.right,
+            ),
         ];
 
         for (corner_index, (x_m, y_m, normal)) in corners.into_iter().enumerate() {
@@ -423,6 +438,7 @@ pub fn generate_led_tubes(track: &Track, fixtures: &[LedTubeFixture]) -> Generat
     GeneratedMesh { vertices, indices }
 }
 
+#[allow(unused)]
 pub fn generate_shadow_debug_blockers(track: &Track) -> GeneratedMesh {
     const BLOCKER_HALF_WIDTH_METRES: f32 = 0.75;
     const BLOCKER_HALF_HEIGHT_METRES: f32 = 0.50;
@@ -628,6 +644,192 @@ pub fn generate_shadow_debug_blockers(track: &Track) -> GeneratedMesh {
     GeneratedMesh { vertices, indices }
 }
 
+pub const LOWER_STRIP_LENGTH_METRES: f32 = TUNNEL_BAY_LENGTH_METRES;
+pub const LOWER_STRIP_HALF_WIDTH_METRES: f32 = 0.035;
+pub const LOWER_STRIP_HALF_HEIGHT_METRES: f32 = 0.045;
+pub const LOWER_STRIP_X_METRES: f32 =
+    SERVICE_WALKWAY_INNER_X_METRES - LOWER_STRIP_HALF_WIDTH_METRES;
+pub const LOWER_STRIP_Y_METRES: f32 =
+    (SERVICE_WALKWAY_TOP_Y_METRES + SERVICE_WALKWAY_BOTTOM_Y_METRES) * 0.5;
+pub const LOWER_STRIP_TILE_PITCH_METRES: f32 = 0.40;
+pub const LOWER_STRIP_TILE_GAP_METRES: f32 = 0.16;
+pub const LOWER_STRIP_LIGHT_RADIUS_METRES: f32 = 3.0;
+pub const LOWER_STRIP_LIGHT_INTENSITY: f32 = 2.5;
+
+#[derive(Copy, Clone, Debug)]
+pub struct LowerStripFixture {
+    pub start_s_metres: f32,
+    pub length_metres: f32,
+    pub x_metres: f32,
+    pub y_metres: f32,
+    pub half_width_metres: f32,
+    pub half_height_metres: f32,
+    #[allow(unused)]
+    pub colour: glam::Vec3,
+    #[allow(unused)]
+    pub intensity: f32,
+    #[allow(unused)]
+    pub radius_metres: f32,
+}
+
+pub fn generate_lower_strip_fixtures(track_length_metres: f32) -> Vec<LowerStripFixture> {
+    let fixture_count = (track_length_metres / TUNNEL_BAY_LENGTH_METRES).floor() as usize;
+
+    (0..fixture_count)
+        .map(|fixture_index| {
+            let start_s_metres = fixture_index as f32 * TUNNEL_BAY_LENGTH_METRES;
+
+            LowerStripFixture {
+                start_s_metres,
+                length_metres: LOWER_STRIP_LENGTH_METRES,
+                x_metres: LOWER_STRIP_X_METRES,
+                y_metres: LOWER_STRIP_Y_METRES,
+                half_width_metres: LOWER_STRIP_HALF_WIDTH_METRES,
+                half_height_metres: LOWER_STRIP_HALF_HEIGHT_METRES,
+                colour: glam::vec3(0.25, 0.55, 1.0),
+                intensity: LOWER_STRIP_LIGHT_INTENSITY,
+                radius_metres: LOWER_STRIP_LIGHT_RADIUS_METRES,
+            }
+        })
+        .collect()
+}
+
+pub fn generate_lower_strip_lights(track: &Track, fixtures: &[LowerStripFixture]) -> GeneratedMesh {
+    let tile_count: usize = fixtures
+        .iter()
+        .map(|fixture| lower_strip_tile_count(fixture.length_metres))
+        .sum();
+
+    let mut vertices = Vec::with_capacity(tile_count * 24);
+    let mut indices = Vec::with_capacity(tile_count * 36);
+
+    for fixture in fixtures {
+        let tile_count = lower_strip_tile_count(fixture.length_metres);
+        let tile_gap_metres = if tile_count > 1 {
+            LOWER_STRIP_TILE_GAP_METRES
+        } else {
+            0.0
+        };
+        let tile_length_metres =
+            (fixture.length_metres - tile_gap_metres * (tile_count - 1) as f32) / tile_count as f32;
+
+        for tile_index in 0..tile_count {
+            let tile_start_s_metres =
+                fixture.start_s_metres + tile_index as f32 * (tile_length_metres + tile_gap_metres);
+            let tile_end_s_metres = tile_start_s_metres + tile_length_metres;
+
+            push_lower_strip_tile(
+                track,
+                fixture,
+                tile_start_s_metres,
+                tile_end_s_metres,
+                &mut vertices,
+                &mut indices,
+            );
+        }
+    }
+
+    GeneratedMesh { vertices, indices }
+}
+
+fn lower_strip_tile_count(length_metres: f32) -> usize {
+    (length_metres / LOWER_STRIP_TILE_PITCH_METRES)
+        .round()
+        .max(1.0) as usize
+}
+
+fn push_lower_strip_tile(
+    track: &Track,
+    fixture: &LowerStripFixture,
+    tile_start_s_metres: f32,
+    tile_end_s_metres: f32,
+    vertices: &mut Vec<Vertex>,
+    indices: &mut Vec<u32>,
+) {
+    let frame0 = track.sample(tile_start_s_metres);
+    let frame1 = track.sample(tile_end_s_metres);
+    let frame_mid = track.sample((tile_start_s_metres + tile_end_s_metres) * 0.5);
+
+    let x0_metres = fixture.x_metres - fixture.half_width_metres;
+    let x1_metres = fixture.x_metres + fixture.half_width_metres;
+    let y0_metres = fixture.y_metres - fixture.half_height_metres;
+    let y1_metres = fixture.y_metres + fixture.half_height_metres;
+
+    let mut push_quad = |corners: [(f32, f32, bool); 4], normal: glam::Vec3| {
+        let base = vertices.len() as u32;
+
+        for (x_metres, y_metres, use_end_frame) in corners {
+            let frame = if use_end_frame { frame1 } else { frame0 };
+            let s_metres = if use_end_frame {
+                tile_end_s_metres
+            } else {
+                tile_start_s_metres
+            };
+
+            let position = frame.origin + frame.right * x_metres + frame.up * y_metres;
+            let uv = glam::vec2(x_metres, s_metres);
+            vertices.push(Vertex::new(position, normal, Some(uv)));
+        }
+
+        indices.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
+    };
+
+    push_quad(
+        [
+            (x1_metres, y0_metres, false),
+            (x1_metres, y0_metres, true),
+            (x1_metres, y1_metres, true),
+            (x1_metres, y1_metres, false),
+        ],
+        frame_mid.right,
+    );
+    push_quad(
+        [
+            (x0_metres, y0_metres, true),
+            (x0_metres, y0_metres, false),
+            (x0_metres, y1_metres, false),
+            (x0_metres, y1_metres, true),
+        ],
+        -frame_mid.right,
+    );
+    push_quad(
+        [
+            (x0_metres, y1_metres, false),
+            (x1_metres, y1_metres, false),
+            (x1_metres, y1_metres, true),
+            (x0_metres, y1_metres, true),
+        ],
+        frame_mid.up,
+    );
+    push_quad(
+        [
+            (x0_metres, y0_metres, true),
+            (x1_metres, y0_metres, true),
+            (x1_metres, y0_metres, false),
+            (x0_metres, y0_metres, false),
+        ],
+        -frame_mid.up,
+    );
+    push_quad(
+        [
+            (x0_metres, y0_metres, false),
+            (x1_metres, y0_metres, false),
+            (x1_metres, y1_metres, false),
+            (x0_metres, y1_metres, false),
+        ],
+        -frame_mid.forward,
+    );
+    push_quad(
+        [
+            (x1_metres, y0_metres, true),
+            (x0_metres, y0_metres, true),
+            (x0_metres, y1_metres, true),
+            (x1_metres, y1_metres, true),
+        ],
+        frame_mid.forward,
+    );
+}
+
 fn lerp(a: f32, b: f32, t: f32) -> f32 {
     a + (b - a) * t
 }
@@ -742,6 +944,30 @@ mod tests {
 
         assert_eq!(mesh.vertices.len(), 44);
         assert_eq!(mesh.indices.len(), 240);
+        assert_eq!(mesh.indices.len() % 3, 0);
+    }
+
+    #[test]
+    fn lower_strip_lights_have_expected_topology() {
+        let track = Track::metro_loop();
+        let fixtures = generate_lower_strip_fixtures(40.0);
+        let mesh = generate_lower_strip_lights(&track, &fixtures);
+
+        let tiles_per_fixture = lower_strip_tile_count(TUNNEL_BAY_LENGTH_METRES);
+        let total_tiles = fixtures.len() * tiles_per_fixture;
+
+        assert_eq!(fixtures.len(), 4);
+        assert_eq!(fixtures[0].length_metres, TUNNEL_BAY_LENGTH_METRES);
+        assert_eq!(
+            fixtures[0].x_metres + fixtures[0].half_width_metres,
+            SERVICE_WALKWAY_INNER_X_METRES
+        );
+        assert_eq!(
+            fixtures[0].y_metres,
+            (SERVICE_WALKWAY_TOP_Y_METRES + SERVICE_WALKWAY_BOTTOM_Y_METRES) * 0.5
+        );
+        assert_eq!(mesh.vertices.len(), total_tiles * 24);
+        assert_eq!(mesh.indices.len(), total_tiles * 36);
         assert_eq!(mesh.indices.len() % 3, 0);
     }
 }

@@ -68,7 +68,7 @@ void main(inout HitPayload payload,
   // payload.hitValue = emittance;
   // payload.weight = brdf * cosTheta / p;
 
-  let emissive = material.emissiveColourFactor * 10.;
+  let emissive = material.emissiveColourFactor;
 
   var directLight = float3(0.0);
 
@@ -97,7 +97,8 @@ void main(inout HitPayload payload,
     shadowRay.Origin = worldPosition + worldNormal * 0.01;
     shadowRay.Direction = lightDir;
     shadowRay.TMin = 0.001;
-    shadowRay.TMax = max(distanceMetres - 1.0, 0.001);
+    shadowRay.TMax = max(distanceMetres - 1.0,
+                         0.001); // Reduce distance to avoid hitting lights
 
     ShadowPayload shadowPayload;
     shadowPayload.hit = true;
