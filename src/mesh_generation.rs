@@ -1,6 +1,33 @@
 use crate::track::Track;
 use lazy_vulkan_gltf::Vertex;
 
+pub const TUNNEL_BAY_LENGTH_METRES: f32 = 10.0;
+
+pub const SERVICE_WALKWAY_INNER_X_METRES: f32 = 2.05;
+pub const SERVICE_WALKWAY_OUTER_X_METRES: f32 = 3.05;
+pub const SERVICE_WALKWAY_TOP_Y_METRES: f32 = -0.78;
+pub const SERVICE_WALKWAY_BOTTOM_Y_METRES: f32 = -1.08;
+
+pub const LED_TUBE_LENGTH_METRES: f32 = 4.0;
+pub const LED_TUBE_X_METRES: f32 = 0.0;
+pub const LED_TUBE_Y_METRES: f32 = 3.52;
+pub const LED_TUBE_HALF_WIDTH_METRES: f32 = 0.09;
+pub const LED_TUBE_HALF_HEIGHT_METRES: f32 = 0.035;
+pub const LED_TUBE_LIGHT_RADIUS_METRES: f32 = 7.0;
+pub const LED_TUBE_LIGHT_INTENSITY: f32 = 6.0;
+
+pub const LOWER_STRIP_LENGTH_METRES: f32 = TUNNEL_BAY_LENGTH_METRES;
+pub const LOWER_STRIP_HALF_WIDTH_METRES: f32 = 0.035;
+pub const LOWER_STRIP_HALF_HEIGHT_METRES: f32 = 0.045;
+pub const LOWER_STRIP_X_METRES: f32 =
+    SERVICE_WALKWAY_INNER_X_METRES - LOWER_STRIP_HALF_WIDTH_METRES;
+pub const LOWER_STRIP_Y_METRES: f32 =
+    (SERVICE_WALKWAY_TOP_Y_METRES + SERVICE_WALKWAY_BOTTOM_Y_METRES) * 0.5;
+pub const LOWER_STRIP_TILE_PITCH_METRES: f32 = 0.40;
+pub const LOWER_STRIP_TILE_GAP_METRES: f32 = 0.16;
+pub const LOWER_STRIP_LIGHT_RADIUS_METRES: f32 = 1.0;
+pub const LOWER_STRIP_LIGHT_INTENSITY: f32 = 1.0;
+
 pub struct GeneratedMesh {
     pub vertices: Vec<Vertex>,
     pub indices: Vec<u32>,
@@ -23,8 +50,6 @@ impl Default for TunnelMeshParams {
         }
     }
 }
-
-pub const TUNNEL_BAY_LENGTH_METRES: f32 = 10.0;
 
 pub fn generate_tunnel_shell(
     track: &Track,
@@ -209,11 +234,6 @@ pub fn generate_rails(track: &Track, start_s_m: f32, length_m: f32) -> Generated
     GeneratedMesh { vertices, indices }
 }
 
-pub const SERVICE_WALKWAY_INNER_X_METRES: f32 = 2.05;
-pub const SERVICE_WALKWAY_OUTER_X_METRES: f32 = 3.05;
-pub const SERVICE_WALKWAY_TOP_Y_METRES: f32 = -0.78;
-pub const SERVICE_WALKWAY_BOTTOM_Y_METRES: f32 = -1.08;
-
 pub fn generate_service_walkway(track: &Track, start_s_m: f32, length_m: f32) -> GeneratedMesh {
     let ring_spacing_m = 2.0;
 
@@ -328,14 +348,6 @@ pub fn generate_cable_tray(track: &Track, start_s_m: f32, length_m: f32) -> Gene
 
     GeneratedMesh { vertices, indices }
 }
-
-pub const LED_TUBE_LENGTH_METRES: f32 = 4.0;
-pub const LED_TUBE_X_METRES: f32 = 0.0;
-pub const LED_TUBE_Y_METRES: f32 = 3.52;
-pub const LED_TUBE_HALF_WIDTH_METRES: f32 = 0.09;
-pub const LED_TUBE_HALF_HEIGHT_METRES: f32 = 0.035;
-pub const LED_TUBE_LIGHT_RADIUS_METRES: f32 = 7.0;
-pub const LED_TUBE_LIGHT_INTENSITY: f32 = 6.0;
 
 #[derive(Copy, Clone, Debug)]
 pub struct LedTubeFixture {
@@ -643,18 +655,6 @@ pub fn generate_shadow_debug_blockers(track: &Track) -> GeneratedMesh {
 
     GeneratedMesh { vertices, indices }
 }
-
-pub const LOWER_STRIP_LENGTH_METRES: f32 = TUNNEL_BAY_LENGTH_METRES;
-pub const LOWER_STRIP_HALF_WIDTH_METRES: f32 = 0.035;
-pub const LOWER_STRIP_HALF_HEIGHT_METRES: f32 = 0.045;
-pub const LOWER_STRIP_X_METRES: f32 =
-    SERVICE_WALKWAY_INNER_X_METRES - LOWER_STRIP_HALF_WIDTH_METRES;
-pub const LOWER_STRIP_Y_METRES: f32 =
-    (SERVICE_WALKWAY_TOP_Y_METRES + SERVICE_WALKWAY_BOTTOM_Y_METRES) * 0.5;
-pub const LOWER_STRIP_TILE_PITCH_METRES: f32 = 0.40;
-pub const LOWER_STRIP_TILE_GAP_METRES: f32 = 0.16;
-pub const LOWER_STRIP_LIGHT_RADIUS_METRES: f32 = 3.0;
-pub const LOWER_STRIP_LIGHT_INTENSITY: f32 = 2.5;
 
 #[derive(Copy, Clone, Debug)]
 pub struct LowerStripFixture {

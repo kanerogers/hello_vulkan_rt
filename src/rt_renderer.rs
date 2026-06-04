@@ -526,10 +526,17 @@ impl SceneData {
             .iter()
             .enumerate()
             .map(|(i, _)| SceneInstance {
+                bay_index: 0,
                 primitive_index: i,
                 world_from_local: glam::Affine3A::default(),
             })
             .collect::<Vec<_>>();
+
+        let scene_instances = vec![SceneInstance {
+            bay_index: 0,
+            primitive_index: 0,
+            world_from_local: glam::Affine3A::default(),
+        }];
 
         // Create the instance buffer
         let instance_buffer = renderer
@@ -637,12 +644,16 @@ struct ScenePrimitive {
 
 /// A scene instance the atomic unit of rendering. It is, basically:
 ///
+/// - A bay index
 /// - A pointer to a [`ScenePrimitive`]
 /// - A transform
 ///
 /// That's it.
 #[derive(Debug, Clone, Copy)]
 struct SceneInstance {
+    // Index into `bays`
+    bay_index: u32,
+
     // Index into `scene_primitives`
     primitive_index: usize,
 
@@ -755,10 +766,7 @@ fn create_instance(
                 transform: glam_to_khr(instance.world_from_local),
 
                 // closesthit.slang reads this via InstanceIndex()
-                instance_custom_index_and_mask: Packed24_8::new(
-                    instance.primitive_index as u32,
-                    0xFF,
-                ),
+                instance_custom_index_and_mask: Packed24_8::new(instance.bay_index, 0xFF),
 
                 instance_shader_binding_table_record_offset_and_flags: Packed24_8::new(
                     0,
@@ -1284,3 +1292,17 @@ fn generate_tunnel_lights(
 
     lights
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u32)]
+enum BayGeometryKind {
+    TunnelShell = 0,
+    SlabBed = 1,
+    Rails = 2,
+    ServiceWalkway = 3,
+    CableTray = 4,
+    LedTubes = 5,
+    LowerStrips = 6,
+}
+
+const BAY_GEOMETRY_KIND_COUNT: usize = 7;
