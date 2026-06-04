@@ -402,7 +402,7 @@ impl SceneData {
 
         let mut light_buffer = renderer
             .allocator
-            .allocate_buffer(1024, vk::BufferUsageFlags::STORAGE_BUFFER);
+            .allocate_buffer(20 * 1024, vk::BufferUsageFlags::STORAGE_BUFFER);
 
         // Create the tunnel mesh
         let tunnel_mesh =
@@ -540,7 +540,8 @@ impl SceneData {
             );
 
         // Create our lights
-        let tunnel_lights = generate_tunnel_lights(track, &led_tube_fixtures);
+        let tunnel_lights =
+            generate_tunnel_lights(track, &led_tube_fixtures, &lower_strip_fixtures);
 
         // Upload to the light buffer
         light_buffer.append(&tunnel_lights, &mut renderer.allocator);
@@ -1241,24 +1242,45 @@ unsafe impl bytemuck::Pod for TunnelLight {}
 
 fn generate_tunnel_lights(
     track: &Track,
-    fixtures: &[mesh_generation::LedTubeFixture],
+    led_fixtures: &[mesh_generation::LedTubeFixture],
+    lower_strip_fixtures: &[mesh_generation::LowerStripFixture],
 ) -> Vec<TunnelLight> {
-    fixtures
-        .iter()
-        .map(|fixture| {
-            let center_s_metres = fixture.start_s_metres + fixture.length_metres * 0.5;
+    let mut lights = Vec::with_capacity(led_fixtures.len() + lower_strip_fixtures.len());
+
+    lights.extend(led_fixtures.iter().map(|fixture| {
+        let center_s_metres = fixture.start_s_metres + fixture.length_metres * 0.5;
+        let frame = track.sample(center_s_metres);
+
+        let position = frame.origin + frame.right * fixture.x_metres + frame.up * fixture.y_metres;
+
+        TunnelLight {
+            position,
+            radius_metres: fixture.radius_metres,
+            colour: fixture.colour,
+            intensity: fixture.intensity,
+            start_s_metres: fixture.start_s_metres,
+        }
+    }));
+
+    for fixture in lower_strip_fixtures {
+        for tile in mesh_generation::lower_strip_tiles(fixture) {
+            let center_s_metres = (tile.start_s_metres + tile.end_s_metres) * 0.5;
             let frame = track.sample(center_s_metres);
 
-            let position =
-                frame.origin + frame.right * fixture.x_metres + frame.up * fixture.y_metres;
+            let inward_face_x_metres = fixture.x_metres - fixture.half_width_metres;
 
-            TunnelLight {
+            let position =
+                frame.origin + frame.right * inward_face_x_metres + frame.up * fixture.y_metres;
+
+            lights.push(TunnelLight {
                 position,
                 radius_metres: fixture.radius_metres,
                 colour: fixture.colour,
                 intensity: fixture.intensity,
-                start_s_metres: fixture.start_s_metres,
-            }
-        })
-        .collect()
+                start_s_metres: tile.start_s_metres,
+            });
+        }
+    }
+
+    lights
 }

@@ -704,25 +704,12 @@ pub fn generate_lower_strip_lights(track: &Track, fixtures: &[LowerStripFixture]
     let mut indices = Vec::with_capacity(tile_count * 36);
 
     for fixture in fixtures {
-        let tile_count = lower_strip_tile_count(fixture.length_metres);
-        let tile_gap_metres = if tile_count > 1 {
-            LOWER_STRIP_TILE_GAP_METRES
-        } else {
-            0.0
-        };
-        let tile_length_metres =
-            (fixture.length_metres - tile_gap_metres * (tile_count - 1) as f32) / tile_count as f32;
-
-        for tile_index in 0..tile_count {
-            let tile_start_s_metres =
-                fixture.start_s_metres + tile_index as f32 * (tile_length_metres + tile_gap_metres);
-            let tile_end_s_metres = tile_start_s_metres + tile_length_metres;
-
+        for tile in lower_strip_tiles(fixture) {
             push_lower_strip_tile(
                 track,
                 fixture,
-                tile_start_s_metres,
-                tile_end_s_metres,
+                tile.start_s_metres,
+                tile.end_s_metres,
                 &mut vertices,
                 &mut indices,
             );
@@ -828,6 +815,36 @@ fn push_lower_strip_tile(
         ],
         frame_mid.forward,
     );
+}
+
+#[derive(Copy, Clone, Debug)]
+pub struct LowerStripTile {
+    pub start_s_metres: f32,
+    pub end_s_metres: f32,
+}
+
+pub fn lower_strip_tiles(fixture: &LowerStripFixture) -> Vec<LowerStripTile> {
+    let tile_count = lower_strip_tile_count(fixture.length_metres);
+    let tile_gap_metres = if tile_count > 1 {
+        LOWER_STRIP_TILE_GAP_METRES
+    } else {
+        0.0
+    };
+
+    let tile_length_metres =
+        (fixture.length_metres - tile_gap_metres * (tile_count - 1) as f32) / tile_count as f32;
+
+    (0..tile_count)
+        .map(|tile_index| {
+            let start_s_metres =
+                fixture.start_s_metres + tile_index as f32 * (tile_length_metres + tile_gap_metres);
+
+            LowerStripTile {
+                start_s_metres,
+                end_s_metres: start_s_metres + tile_length_metres,
+            }
+        })
+        .collect()
 }
 
 fn lerp(a: f32, b: f32, t: f32) -> f32 {
