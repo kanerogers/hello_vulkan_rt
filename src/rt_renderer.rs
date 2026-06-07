@@ -522,19 +522,9 @@ impl SceneData {
         primitive_buffer.append(&primitive_data, &mut renderer.allocator);
 
         // One of each, please.
-        let scene_instances = primitive_data
-            .iter()
-            .enumerate()
-            .map(|(i, _)| SceneInstance {
-                bay_index: 0,
-                primitive_index: i,
-                world_from_local: glam::Affine3A::default(),
-            })
-            .collect::<Vec<_>>();
-
         let scene_instances = vec![SceneInstance {
             bay_index: 0,
-            primitive_index: 0,
+            blas_index: 0,
             world_from_local: glam::Affine3A::default(),
         }];
 
@@ -654,8 +644,7 @@ struct SceneInstance {
     // Index into `bays`
     bay_index: u32,
 
-    // Index into `scene_primitives`
-    primitive_index: usize,
+    blas_index: usize,
 
     // Transform
     world_from_local: glam::Affine3A,
@@ -686,18 +675,13 @@ impl RTState {
         // 3) `Buffer.flush(command_buffer` / `allocator.flush_buffer(buffer, command_buffer)` <-- executes just the transfers for this buffer
         allocator.execute_transfers(command_buffer);
 
-        // First, build up our primitive buffer
-        // We start with a map between primitive indices and BLAS indices
-        let mut primitive_blas = Vec::with_capacity(scene_data.scene_primitives.len());
-
-        // Then we iterate through the scene primitives and build the BLAS for each one
-        for primitive in &scene_data.scene_primitives {
-            // Build the BLAS for this primitive
-            let blas = build_blas(context, allocator, command_buffer, primitive);
-
-            // Add it to our map
-            primitive_blas.push(blas);
-        }
+        // First, build up our BLASes
+        let bay_blas = vec![build_blas(
+            context,
+            allocator,
+            command_buffer,
+            &scene_data.scene_primitives,
+        )];
 
         // Next, build our instance buffer
         for instance in &scene_data.scene_instances {
@@ -706,7 +690,7 @@ impl RTState {
                 context,
                 allocator,
                 &mut scene_data.instance_buffer,
-                &primitive_blas,
+                &bay_blas,
                 instance,
             );
         }
@@ -747,10 +731,10 @@ fn create_instance(
     context: &lazy_vulkan::Context,
     allocator: &mut lazy_vulkan::Allocator,
     instance_buffer: &mut BufferAllocation<vk::AccelerationStructureInstanceKHR>,
-    primitive_blas: &Vec<vk::AccelerationStructureKHR>,
+    bay_blas: &[vk::AccelerationStructureKHR],
     instance: &SceneInstance,
 ) {
-    let blas = primitive_blas[instance.primitive_index];
+    let blas = bay_blas[instance.blas_index];
     let blas_address = unsafe {
         context
             .acceleration_structure_pfn
@@ -765,7 +749,7 @@ fn create_instance(
             &[vk::AccelerationStructureInstanceKHR {
                 transform: glam_to_khr(instance.world_from_local),
 
-                // closesthit.slang reads this via InstanceIndex()
+                // closesthit.slang reads this via InstanceID()
                 instance_custom_index_and_mask: Packed24_8::new(instance.bay_index, 0xFF),
 
                 instance_shader_binding_table_record_offset_and_flags: Packed24_8::new(
@@ -785,25 +769,34 @@ fn build_blas(
     context: &lazy_vulkan::Context,
     allocator: &mut lazy_vulkan::Allocator,
     command_buffer: vk::CommandBuffer,
-    primitive: &ScenePrimitive,
+    primitives: &[ScenePrimitive],
 ) -> vk::AccelerationStructureKHR {
-    let primitive_count = primitive.index_count / 3;
-    let geometries = &[vk::AccelerationStructureGeometryKHR::default()
-        .geometry(vk::AccelerationStructureGeometryDataKHR {
-            triangles: vk::AccelerationStructureGeometryTrianglesDataKHR::default()
-                .index_data(vk::DeviceOrHostAddressConstKHR {
-                    device_address: primitive.indices,
+    let geometries = primitives
+        .iter()
+        .map(|primitive| {
+            vk::AccelerationStructureGeometryKHR::default()
+                .geometry(vk::AccelerationStructureGeometryDataKHR {
+                    triangles: vk::AccelerationStructureGeometryTrianglesDataKHR::default()
+                        .index_data(vk::DeviceOrHostAddressConstKHR {
+                            device_address: primitive.indices,
+                        })
+                        .index_type(vk::IndexType::UINT32)
+                        .vertex_format(vk::Format::R32G32B32_SFLOAT)
+                        .vertex_data(vk::DeviceOrHostAddressConstKHR {
+                            device_address: primitive.vertices,
+                        })
+                        .vertex_stride(std::mem::size_of::<lazy_vulkan_gltf::Vertex>() as _)
+                        .max_vertex(primitive.vertex_count - 1),
                 })
-                .index_type(vk::IndexType::UINT32)
-                .vertex_format(vk::Format::R32G32B32_SFLOAT)
-                .vertex_data(vk::DeviceOrHostAddressConstKHR {
-                    device_address: primitive.vertices,
-                })
-                .vertex_stride(std::mem::size_of::<lazy_vulkan_gltf::Vertex>() as _)
-                .max_vertex(primitive.vertex_count - 1),
+                .geometry_type(vk::GeometryTypeKHR::TRIANGLES)
+                .flags(vk::GeometryFlagsKHR::NO_DUPLICATE_ANY_HIT_INVOCATION)
         })
-        .geometry_type(vk::GeometryTypeKHR::TRIANGLES)
-        .flags(vk::GeometryFlagsKHR::NO_DUPLICATE_ANY_HIT_INVOCATION)];
+        .collect::<Vec<_>>();
+
+    let primitive_counts = primitives
+        .iter()
+        .map(|primitive| primitive.index_count / 3)
+        .collect::<Vec<_>>();
 
     let mut size_info = vk::AccelerationStructureBuildSizesInfoKHR::default();
     unsafe {
@@ -814,8 +807,8 @@ fn build_blas(
                 &vk::AccelerationStructureBuildGeometryInfoKHR::default()
                     .ty(vk::AccelerationStructureTypeKHR::BOTTOM_LEVEL)
                     .mode(vk::BuildAccelerationStructureModeKHR::BUILD)
-                    .geometries(geometries),
-                &[primitive_count],
+                    .geometries(&geometries),
+                &primitive_counts,
                 &mut size_info,
             )
     };
@@ -847,6 +840,13 @@ fn build_blas(
         vk::BufferUsageFlags::STORAGE_BUFFER,
     );
 
+    let build_ranges = primitive_counts
+        .iter()
+        .map(|&primitive_count| {
+            vk::AccelerationStructureBuildRangeInfoKHR::default().primitive_count(primitive_count)
+        })
+        .collect::<Vec<_>>();
+
     unsafe {
         context
             .acceleration_structure_pfn
@@ -855,13 +855,12 @@ fn build_blas(
                 &[vk::AccelerationStructureBuildGeometryInfoKHR::default()
                     .ty(vk::AccelerationStructureTypeKHR::BOTTOM_LEVEL)
                     .mode(vk::BuildAccelerationStructureModeKHR::BUILD)
-                    .geometries(geometries)
+                    .geometries(&geometries)
                     .dst_acceleration_structure(blas)
                     .scratch_data(vk::DeviceOrHostAddressKHR {
                         device_address: scratch_buffer.device_address,
                     })],
-                &[&[vk::AccelerationStructureBuildRangeInfoKHR::default()
-                    .primitive_count(primitive_count)]],
+                &[&build_ranges],
             )
     };
     blas

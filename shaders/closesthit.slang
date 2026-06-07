@@ -4,7 +4,13 @@ import sampling;
 [shader("closesthit")]
 void main(inout HitPayload payload,
           BuiltInTriangleIntersectionAttributes attributes) {
-  Primitive primitive = registers.primitiveBuffer[InstanceIndex()];
+  // Fetch the primitive, based on bayId and geometryKind
+  let bayId = InstanceID();
+  let geometryKind = GeometryIndex();
+  let primitiveIndex = bayId * BAY_GEOMETRY_KIND_COUNT + geometryKind;
+
+  Primitive primitive = registers.primitiveBuffer[primitiveIndex];
+
   uint indexOffset = 3 * PrimitiveIndex();
 
   uint3 triangleIndex = uint3(primitive.indexBuffer[indexOffset],
@@ -54,7 +60,7 @@ void main(inout HitPayload payload,
 
   var panelBand = 1.;
 
-  if (InstanceIndex() == 0) {
+  if (geometryKind == GEOMETRY_KIND_TUNNEL_SHELL) {
     let panelPhase = frac(uv.y / registers.tunnelBayLengthMetres);
     panelBand = panelPhase < 0.0100 ? 0.05 : 1.0;
   }
@@ -106,8 +112,8 @@ void main(inout HitPayload payload,
     TraceRay(tlas,
              RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH | RAY_FLAG_FORCE_OPAQUE |
                  RAY_FLAG_SKIP_CLOSEST_HIT_SHADER,
-             0xFF, RAY_TYPE_SHADOW, RAY_TYPE_COUNT, MISS_TYPE_SHADOW, shadowRay,
-             shadowPayload);
+             0xFF, RAY_TYPE_RADIANCE, HIT_SBT_STRIDE_IGNORE_GEOMETRY,
+             MISS_TYPE_SHADOW, shadowRay, shadowPayload);
 
     if (shadowPayload.hit) {
       continue;

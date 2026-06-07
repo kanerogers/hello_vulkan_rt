@@ -41,7 +41,7 @@ void main() {
     ray.TMax = 10000.0;
 
     TraceRay(tlas, RAY_FLAG_FORCE_OPAQUE, 0xFF, RAY_TYPE_RADIANCE,
-             RAY_TYPE_COUNT, MISS_TYPE_RADIANCE, ray, payload);
+             HIT_SBT_STRIDE_IGNORE_GEOMETRY, MISS_TYPE_RADIANCE, ray, payload);
 
     hitValue += payload.hitValue * curWeight;
     curWeight *= payload.weight;

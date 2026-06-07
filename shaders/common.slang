@@ -59,8 +59,11 @@ struct TunnelLight {
 }
 
 static const uint RAY_TYPE_RADIANCE = 0;
-static const uint RAY_TYPE_SHADOW = 1;
-static const uint RAY_TYPE_COUNT = 2;
+static const uint RAY_TYPE_COUNT = 1;
 
 static const uint MISS_TYPE_RADIANCE = 0;
 static const uint MISS_TYPE_SHADOW = 1;
+
+static const uint BAY_GEOMETRY_KIND_COUNT = 7;
+static const uint GEOMETRY_KIND_TUNNEL_SHELL = 0;
+static const uint HIT_SBT_STRIDE_IGNORE_GEOMETRY = 0;
