@@ -80,49 +80,58 @@ void main(inout HitPayload payload,
 
   let activeRangeMetres = 80.0;
 
-  for (uint lightIndex = 0; lightIndex < registers.lightCount; lightIndex++) {
-    let light = registers.lightBuffer[lightIndex];
+  // for (uint lightIndex = 0; lightIndex < registers.lightCount; lightIndex++)
+  // {
+  //   let light = registers.lightBuffer[lightIndex];
 
-    let rawDeltaS = abs(light.startSMetres - registers.trainTrackSMetres);
-    let wrappedDeltaS = min(rawDeltaS, registers.trackLengthMetres - rawDeltaS);
+  //   let rawDeltaS = abs(light.startSMetres - registers.trainTrackSMetres);
+  //   let wrappedDeltaS = min(rawDeltaS, registers.trackLengthMetres -
+  //   rawDeltaS);
 
-    if (wrappedDeltaS > activeRangeMetres) {
-      continue;
-    }
+  //   if (wrappedDeltaS > activeRangeMetres) {
+  //     continue;
+  //   }
 
-    let toLight = light.position - worldPosition;
-    let distanceMetres = length(toLight);
-    let lightDir = toLight / max(distanceMetres, 0.001);
+  //   let toLight = light.position - worldPosition;
+  //   let distanceMetres = length(toLight);
+  //   let lightDir = toLight / max(distanceMetres, 0.001);
 
-    let ndotl = saturate(dot(worldNormal, lightDir));
+  //   let ndotl = saturate(dot(worldNormal, lightDir));
 
-    let radiusFade = saturate(1.0 - distanceMetres / light.radiusMetres);
-    let attenuation = radiusFade * radiusFade;
+  //   let radiusFade = saturate(1.0 - distanceMetres / light.radiusMetres);
+  //   let attenuation = radiusFade * radiusFade;
 
-    RayDesc shadowRay;
-    shadowRay.Origin = worldPosition + worldNormal * 0.01;
-    shadowRay.Direction = lightDir;
-    shadowRay.TMin = 0.001;
-    shadowRay.TMax = max(distanceMetres - 1.0,
-                         0.001); // Reduce distance to avoid hitting lights
+  //   RayDesc shadowRay;
+  //   shadowRay.Origin = worldPosition + worldNormal * 0.01;
+  //   shadowRay.Direction = lightDir;
+  //   shadowRay.TMin = 0.001;
+  //   shadowRay.TMax = max(distanceMetres - 1.0,
+  //                        0.001); // Reduce distance to avoid hitting lights
 
-    ShadowPayload shadowPayload;
-    shadowPayload.hit = true;
+  //   ShadowPayload shadowPayload;
+  //   shadowPayload.hit = true;
 
-    TraceRay(tlas,
-             RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH | RAY_FLAG_FORCE_OPAQUE |
-                 RAY_FLAG_SKIP_CLOSEST_HIT_SHADER,
-             0xFF, RAY_TYPE_RADIANCE, HIT_SBT_STRIDE_IGNORE_GEOMETRY,
-             MISS_TYPE_SHADOW, shadowRay, shadowPayload);
+  //   TraceRay(tlas,
+  //            RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH | RAY_FLAG_FORCE_OPAQUE
+  //            |
+  //                RAY_FLAG_SKIP_CLOSEST_HIT_SHADER,
+  //            0xFF, RAY_TYPE_RADIANCE, HIT_SBT_STRIDE_IGNORE_GEOMETRY,
+  //            MISS_TYPE_SHADOW, shadowRay, shadowPayload);
 
-    if (shadowPayload.hit) {
-      continue;
-    }
+  //   if (shadowPayload.hit) {
+  //     continue;
+  //   }
 
-    directLight += light.colour * light.intensity * ndotl * attenuation;
-  }
+  //   directLight += light.colour * light.intensity * ndotl * attenuation;
+  // }
 
   payload.hitValue = emissive + albedo * (0.01 + directLight);
   payload.weight = float3(0.0);
   payload.depth = 100;
+
+  let bayDebug = frac(float(bayId) * 0.137);
+  payload.hitValue = float3(bayDebug, 1.0 - bayDebug, 0.25);
+  payload.weight = float3(0.0);
+  payload.depth = 100;
+  return;
 }

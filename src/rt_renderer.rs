@@ -404,100 +404,113 @@ impl SceneData {
             .allocator
             .allocate_buffer(20 * 1024, vk::BufferUsageFlags::STORAGE_BUFFER);
 
-        // Create the tunnel mesh
-        let tunnel_mesh =
-            generate_tunnel_shell(track, 0.0, TRACK_LENGTH_METRES, Default::default());
-
-        let tunnel = create_scene_primitive(
-            renderer,
-            &mut vertex_buffer,
-            &mut index_buffer,
-            tunnel_mesh,
-            glam::vec4(0.55, 0.57, 0.56, 1.0),
-        );
-
-        // Generate the slab bed mesh
-        let slab_bed_mesh = generate_slab_bed(track, 0.0, TRACK_LENGTH_METRES);
-        let slab_bed = create_scene_primitive(
-            renderer,
-            &mut vertex_buffer,
-            &mut index_buffer,
-            slab_bed_mesh,
-            glam::vec4(0.32, 0.33, 0.33, 1.0),
-        );
-
-        // Generate the rails
-        let rail_mesh = generate_rails(&track, 0.0, TRACK_LENGTH_METRES);
-        let rails = create_scene_primitive(
-            renderer,
-            &mut vertex_buffer,
-            &mut index_buffer,
-            rail_mesh,
-            glam::vec4(0.10, 0.105, 0.11, 1.0),
-        );
-
-        // Generate the service walkway
-        let service_walkway_mesh = generate_service_walkway(track, 0.0, TRACK_LENGTH_METRES);
-        let service_walkway = create_scene_primitive(
-            renderer,
-            &mut vertex_buffer,
-            &mut index_buffer,
-            service_walkway_mesh,
-            glam::vec4(0.55, 0.57, 0.56, 1.0),
-        );
-
-        // Generate the cable tray
-        let cable_tray_mesh = generate_cable_tray(&track, 0.0, TRACK_LENGTH_METRES);
-        let cable_tray = create_scene_primitive(
-            renderer,
-            &mut vertex_buffer,
-            &mut index_buffer,
-            cable_tray_mesh,
-            glam::vec4(0.42, 0.43, 0.41, 1.0),
-        );
-
-        // Generate the LED tubes
+        // Generate light fixtures
         let led_tube_fixtures = generate_led_tube_fixtures(TRACK_LENGTH_METRES);
-        let led_tube_mesh = generate_led_tubes(track, &led_tube_fixtures);
-        let led_tubes = create_scene_primitive_with_emission(
-            renderer,
-            &mut vertex_buffer,
-            &mut index_buffer,
-            led_tube_mesh,
-            glam::vec4(0.82, 0.90, 1.0, 1.0),
-            glam::vec3(0.65, 0.85, 1.0) * 2.0,
-        );
-
-        // let blocker_mesh = generate_shadow_debug_blockers(track);
-        // let blockers = create_scene_primitive(
-        //     renderer,
-        //     &mut vertex_buffer,
-        //     &mut index_buffer,
-        //     blocker_mesh,
-        //     glam::vec4(0.05, 0.05, 0.07, 1.0),
-        // );
-
         let lower_strip_fixtures = generate_lower_strip_fixtures(TRACK_LENGTH_METRES);
-        let lower_strip_mesh = generate_lower_strip_lights(track, &lower_strip_fixtures);
-        let lower_strips = create_scene_primitive_with_emission(
-            renderer,
-            &mut vertex_buffer,
-            &mut index_buffer,
-            lower_strip_mesh,
-            glam::vec4(0.18, 0.35, 1.0, 1.0),
-            glam::vec3(0.15, 0.35, 1.0),
+
+        let bay_count = (TRACK_LENGTH_METRES / TUNNEL_BAY_LENGTH_METRES).round() as usize;
+        debug_assert!(
+            (bay_count as f32 * TUNNEL_BAY_LENGTH_METRES - TRACK_LENGTH_METRES).abs() < 0.001
         );
 
-        // Gather our scene primitives
-        let mut scene_primitives = vec![tunnel; BAY_GEOMETRY_KIND_COUNT];
+        let mut scene_primitives = Vec::with_capacity(bay_count * BAY_GEOMETRY_KIND_COUNT);
 
-        scene_primitives[BayGeometryKind::TunnelShell.index()] = tunnel;
-        scene_primitives[BayGeometryKind::SlabBed.index()] = slab_bed;
-        scene_primitives[BayGeometryKind::Rails.index()] = rails;
-        scene_primitives[BayGeometryKind::ServiceWalkway.index()] = service_walkway;
-        scene_primitives[BayGeometryKind::CableTray.index()] = cable_tray;
-        scene_primitives[BayGeometryKind::LedTubes.index()] = led_tubes;
-        scene_primitives[BayGeometryKind::LowerStrips.index()] = lower_strips;
+        for bay_index in 0..bay_count {
+            let bay_start_s_metres = bay_index as f32 * TUNNEL_BAY_LENGTH_METRES;
+
+            let bay_led_fixtures = led_tube_fixtures
+                .iter()
+                .copied()
+                .filter(|fixture| {
+                    fixture.start_s_metres >= bay_start_s_metres
+                        && fixture.start_s_metres < bay_start_s_metres + TUNNEL_BAY_LENGTH_METRES
+                })
+                .collect::<Vec<_>>();
+
+            let bay_lower_strip_fixtures = lower_strip_fixtures
+                .iter()
+                .copied()
+                .filter(|fixture| {
+                    fixture.start_s_metres >= bay_start_s_metres
+                        && fixture.start_s_metres < bay_start_s_metres + TUNNEL_BAY_LENGTH_METRES
+                })
+                .collect::<Vec<_>>();
+
+            let tunnel = create_scene_primitive(
+                renderer,
+                &mut vertex_buffer,
+                &mut index_buffer,
+                generate_tunnel_shell(
+                    track,
+                    bay_start_s_metres,
+                    TUNNEL_BAY_LENGTH_METRES,
+                    Default::default(),
+                ),
+                glam::vec4(0.55, 0.57, 0.56, 1.0),
+            );
+
+            let slab_bed = create_scene_primitive(
+                renderer,
+                &mut vertex_buffer,
+                &mut index_buffer,
+                generate_slab_bed(track, bay_start_s_metres, TUNNEL_BAY_LENGTH_METRES),
+                glam::vec4(0.32, 0.33, 0.33, 1.0),
+            );
+
+            let rails = create_scene_primitive(
+                renderer,
+                &mut vertex_buffer,
+                &mut index_buffer,
+                generate_rails(track, bay_start_s_metres, TUNNEL_BAY_LENGTH_METRES),
+                glam::vec4(0.10, 0.105, 0.11, 1.0),
+            );
+
+            let service_walkway = create_scene_primitive(
+                renderer,
+                &mut vertex_buffer,
+                &mut index_buffer,
+                generate_service_walkway(track, bay_start_s_metres, TUNNEL_BAY_LENGTH_METRES),
+                glam::vec4(0.55, 0.57, 0.56, 1.0),
+            );
+
+            let cable_tray = create_scene_primitive(
+                renderer,
+                &mut vertex_buffer,
+                &mut index_buffer,
+                generate_cable_tray(track, bay_start_s_metres, TUNNEL_BAY_LENGTH_METRES),
+                glam::vec4(0.42, 0.43, 0.41, 1.0),
+            );
+
+            let led_tubes = create_scene_primitive_with_emission(
+                renderer,
+                &mut vertex_buffer,
+                &mut index_buffer,
+                generate_led_tubes(track, &bay_led_fixtures),
+                glam::vec4(0.82, 0.90, 1.0, 1.0),
+                glam::vec3(0.65, 0.85, 1.0) * 2.0,
+            );
+
+            let lower_strips = create_scene_primitive_with_emission(
+                renderer,
+                &mut vertex_buffer,
+                &mut index_buffer,
+                generate_lower_strip_lights(track, &bay_lower_strip_fixtures),
+                glam::vec4(0.18, 0.35, 1.0, 1.0),
+                glam::vec3(0.15, 0.35, 1.0),
+            );
+
+            let mut bay_primitives = vec![tunnel; BAY_GEOMETRY_KIND_COUNT];
+            bay_primitives[BayGeometryKind::TunnelShell.index()] = tunnel;
+            bay_primitives[BayGeometryKind::SlabBed.index()] = slab_bed;
+            bay_primitives[BayGeometryKind::Rails.index()] = rails;
+            bay_primitives[BayGeometryKind::ServiceWalkway.index()] = service_walkway;
+            bay_primitives[BayGeometryKind::CableTray.index()] = cable_tray;
+            bay_primitives[BayGeometryKind::LedTubes.index()] = led_tubes;
+            bay_primitives[BayGeometryKind::LowerStrips.index()] = lower_strips;
+
+            debug_assert_eq!(scene_primitives.len(), bay_index * BAY_GEOMETRY_KIND_COUNT);
+            scene_primitives.extend_from_slice(&bay_primitives);
+        }
 
         // Append the data to our primitive buffer
         let primitive_data: Vec<Primitive> = scene_primitives
@@ -521,12 +534,13 @@ impl SceneData {
             .collect();
         primitive_buffer.append(&primitive_data, &mut renderer.allocator);
 
-        // One of each, please.
-        let scene_instances = vec![SceneInstance {
-            bay_index: 0,
-            blas_index: 0,
-            world_from_local: glam::Affine3A::default(),
-        }];
+        let scene_instances = (0..bay_count)
+            .map(|bay_index| SceneInstance {
+                bay_index: bay_index as u32,
+                blas_index: bay_index,
+                world_from_local: glam::Affine3A::default(),
+            })
+            .collect::<Vec<_>>();
 
         // Create the instance buffer
         let instance_buffer = renderer
@@ -676,12 +690,19 @@ impl RTState {
         allocator.execute_transfers(command_buffer);
 
         // First, build up our BLASes
-        let bay_blas = vec![build_blas(
-            context,
-            allocator,
-            command_buffer,
-            &scene_data.scene_primitives,
-        )];
+        let bay_blas = (0..scene_data.scene_instances.len())
+            .map(|bay_index| {
+                let primitive_start = bay_index * BAY_GEOMETRY_KIND_COUNT;
+                let primitive_end = primitive_start + BAY_GEOMETRY_KIND_COUNT;
+
+                build_blas(
+                    context,
+                    allocator,
+                    command_buffer,
+                    &scene_data.scene_primitives[primitive_start..primitive_end],
+                )
+            })
+            .collect::<Vec<_>>();
 
         // Next, build our instance buffer
         for instance in &scene_data.scene_instances {
