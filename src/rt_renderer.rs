@@ -489,15 +489,15 @@ impl SceneData {
         );
 
         // Gather our scene primitives
-        let scene_primitives = vec![
-            tunnel,
-            slab_bed,
-            rails,
-            service_walkway,
-            cable_tray,
-            led_tubes,
-            lower_strips,
-        ];
+        let mut scene_primitives = vec![tunnel; BAY_GEOMETRY_KIND_COUNT];
+
+        scene_primitives[BayGeometryKind::TunnelShell.index()] = tunnel;
+        scene_primitives[BayGeometryKind::SlabBed.index()] = slab_bed;
+        scene_primitives[BayGeometryKind::Rails.index()] = rails;
+        scene_primitives[BayGeometryKind::ServiceWalkway.index()] = service_walkway;
+        scene_primitives[BayGeometryKind::CableTray.index()] = cable_tray;
+        scene_primitives[BayGeometryKind::LedTubes.index()] = led_tubes;
+        scene_primitives[BayGeometryKind::LowerStrips.index()] = lower_strips;
 
         // Append the data to our primitive buffer
         let primitive_data: Vec<Primitive> = scene_primitives
@@ -1302,6 +1302,12 @@ enum BayGeometryKind {
     CableTray = 4,
     LedTubes = 5,
     LowerStrips = 6,
+}
+
+impl BayGeometryKind {
+    fn index(&self) -> usize {
+        *self as usize
+    }
 }
 
 const BAY_GEOMETRY_KIND_COUNT: usize = 7;
