@@ -80,58 +80,81 @@ void main(inout HitPayload payload,
 
   let activeRangeMetres = 80.0;
 
-  // for (uint lightIndex = 0; lightIndex < registers.lightCount; lightIndex++)
-  // {
-  //   let light = registers.lightBuffer[lightIndex];
+  let bayCount = max(registers.lightCount / TUNNEL_LIGHTS_PER_BAY, 1u);
 
-  //   let rawDeltaS = abs(light.startSMetres - registers.trainTrackSMetres);
-  //   let wrappedDeltaS = min(rawDeltaS, registers.trackLengthMetres -
-  //   rawDeltaS);
+  let previousBay = bayId == 0 ? bayCount - 1 : bayId - 1;
+  let nextBay = bayId + 1 == bayCount ? 0 : bayId + 1;
 
-  //   if (wrappedDeltaS > activeRangeMetres) {
-  //     continue;
-  //   }
+  directLight += sampleTunnelLight(previousBay * TUNNEL_LIGHTS_PER_BAY +
+                                       LED_LIGHT_OFFSET_IN_BAY,
+                                   worldPosition, worldNormal);
 
-  //   let toLight = light.position - worldPosition;
-  //   let distanceMetres = length(toLight);
-  //   let lightDir = toLight / max(distanceMetres, 0.001);
+  directLight +=
+      sampleTunnelLight(bayId * TUNNEL_LIGHTS_PER_BAY + LED_LIGHT_OFFSET_IN_BAY,
+                        worldPosition, worldNormal);
 
-  //   let ndotl = saturate(dot(worldNormal, lightDir));
+  directLight += sampleTunnelLight(nextBay * TUNNEL_LIGHTS_PER_BAY +
+                                       LED_LIGHT_OFFSET_IN_BAY,
+                                   worldPosition, worldNormal);
 
-  //   let radiusFade = saturate(1.0 - distanceMetres / light.radiusMetres);
-  //   let attenuation = radiusFade * radiusFade;
+  let stripBase =
+      bayId * TUNNEL_LIGHTS_PER_BAY + LOWER_STRIP_LIGHT_OFFSET_IN_BAY;
 
-  //   RayDesc shadowRay;
-  //   shadowRay.Origin = worldPosition + worldNormal * 0.01;
-  //   shadowRay.Direction = lightDir;
-  //   shadowRay.TMin = 0.001;
-  //   shadowRay.TMax = max(distanceMetres - 1.0,
-  //                        0.001); // Reduce distance to avoid hitting lights
-
-  //   ShadowPayload shadowPayload;
-  //   shadowPayload.hit = true;
-
-  //   TraceRay(tlas,
-  //            RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH | RAY_FLAG_FORCE_OPAQUE
-  //            |
-  //                RAY_FLAG_SKIP_CLOSEST_HIT_SHADER,
-  //            0xFF, RAY_TYPE_RADIANCE, HIT_SBT_STRIDE_IGNORE_GEOMETRY,
-  //            MISS_TYPE_SHADOW, shadowRay, shadowPayload);
-
-  //   if (shadowPayload.hit) {
-  //     continue;
-  //   }
-
-  //   directLight += light.colour * light.intensity * ndotl * attenuation;
-  // }
+  for (uint stripLightIndex = 0; stripLightIndex < LOWER_STRIP_LIGHTS_PER_BAY;
+       stripLightIndex++) {
+    directLight += sampleTunnelLight(stripBase + stripLightIndex, worldPosition,
+                                     worldNormal);
+  }
 
   payload.hitValue = emissive + albedo * (0.01 + directLight);
   payload.weight = float3(0.0);
   payload.depth = 100;
 
-  let bayDebug = frac(float(bayId) * 0.137);
-  payload.hitValue = float3(bayDebug, 1.0 - bayDebug, 0.25);
-  payload.weight = float3(0.0);
-  payload.depth = 100;
+  // let bayDebug = frac(float(bayId) * 0.137);
+  // payload.hitValue = float3(bayDebug, 1.0 - bayDebug, 0.25) * directLight;
+  // payload.weight = float3(0.0);
+  // payload.depth = 100;
   return;
+}
+
+float3 sampleTunnelLight(uint lightIndex, float3 worldPosition,
+                         float3 worldNormal) {
+  if (lightIndex >= registers.lightCount) {
+    return float3(0.0);
+  }
+
+  let light = registers.lightBuffer[lightIndex];
+
+  let toLight = light.position - worldPosition;
+  let distanceMetres = length(toLight);
+  let lightDir = toLight / max(distanceMetres, 0.001);
+
+  let ndotl = saturate(dot(worldNormal, lightDir));
+  let radiusFade = saturate(1.0 - distanceMetres / light.radiusMetres);
+  let attenuation = radiusFade * radiusFade;
+
+  if (ndotl <= 0.0 || attenuation <= 0.0) {
+    return float3(0.0);
+  }
+
+  RayDesc shadowRay;
+  shadowRay.Origin = worldPosition + worldNormal * 0.01;
+  shadowRay.Direction = lightDir;
+  shadowRay.TMin = 0.001;
+  shadowRay.TMax = max(distanceMetres - 1.0, 0.001);
+
+  ShadowPayload shadowPayload;
+  shadowPayload.hit = true;
+
+  TraceRay(tlas,
+           RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH | RAY_FLAG_FORCE_OPAQUE |
+               RAY_FLAG_SKIP_CLOSEST_HIT_SHADER,
+           0xFF, RAY_TYPE_RADIANCE, HIT_SBT_STRIDE_IGNORE_GEOMETRY,
+           MISS_TYPE_SHADOW, shadowRay, shadowPayload);
+
+  if (shadowPayload.hit) {
+    return float3(0.0);
+  }
+
+  return light.colour * light.intensity * ndotl * attenuation;
 }

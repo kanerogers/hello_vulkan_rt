@@ -38,7 +38,7 @@ void main() {
     ray.Origin = payload.rayOrigin;
     ray.TMin = 0.001;
     ray.Direction = payload.rayDirection;
-    ray.TMax = 10000.0;
+    ray.TMax = 1000.0;
 
     TraceRay(tlas, RAY_FLAG_FORCE_OPAQUE, 0xFF, RAY_TYPE_RADIANCE,
              HIT_SBT_STRIDE_IGNORE_GEOMETRY, MISS_TYPE_RADIANCE, ray, payload);

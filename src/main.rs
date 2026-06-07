@@ -20,7 +20,11 @@ const MAX_FRAME_TIME_S: f32 = 0.25;
 impl ApplicationHandler for App {
     fn resumed(&mut self, event_loop: &winit::event_loop::ActiveEventLoop) {
         let window = event_loop
-            .create_window(WindowAttributes::default().with_title("Hello RT"))
+            .create_window(
+                WindowAttributes::default()
+                    .with_title("Hello RT")
+                    .with_maximized(true),
+            )
             .unwrap();
 
         let mut lazy_vulkan = LazyVulkan::from_window(&window);

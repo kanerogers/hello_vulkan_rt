@@ -30,6 +30,11 @@ const MISS_INDEX: u32 = 1;
 const SHADOW_MISS_INDEX: u32 = 2;
 const CLOSEST_HIT_INDEX: u32 = 3;
 
+const LOWER_STRIP_LIGHTS_PER_BAY: usize = 25;
+const TUNNEL_LIGHTS_PER_BAY: usize = 1 + LOWER_STRIP_LIGHTS_PER_BAY;
+
+const BAY_COUNT: usize = (TRACK_LENGTH_METRES / TUNNEL_BAY_LENGTH_METRES).round() as usize;
+
 pub struct RTRenderer {
     context: Arc<lazy_vulkan::Context>,
     image: lazy_vulkan::Image,
@@ -400,22 +405,18 @@ impl SceneData {
             .allocator
             .allocate_buffer(10 * 1024 * 1024, vk::BufferUsageFlags::STORAGE_BUFFER);
 
-        let mut light_buffer = renderer
-            .allocator
-            .allocate_buffer(20 * 1024, vk::BufferUsageFlags::STORAGE_BUFFER);
-
         // Generate light fixtures
         let led_tube_fixtures = generate_led_tube_fixtures(TRACK_LENGTH_METRES);
         let lower_strip_fixtures = generate_lower_strip_fixtures(TRACK_LENGTH_METRES);
 
-        let bay_count = (TRACK_LENGTH_METRES / TUNNEL_BAY_LENGTH_METRES).round() as usize;
-        debug_assert!(
-            (bay_count as f32 * TUNNEL_BAY_LENGTH_METRES - TRACK_LENGTH_METRES).abs() < 0.001
+        let mut light_buffer = renderer.allocator.allocate_buffer::<TunnelLight>(
+            BAY_COUNT * TUNNEL_LIGHTS_PER_BAY,
+            vk::BufferUsageFlags::STORAGE_BUFFER,
         );
 
-        let mut scene_primitives = Vec::with_capacity(bay_count * BAY_GEOMETRY_KIND_COUNT);
+        let mut scene_primitives = Vec::with_capacity(BAY_COUNT * BAY_GEOMETRY_KIND_COUNT);
 
-        for bay_index in 0..bay_count {
+        for bay_index in 0..BAY_COUNT {
             let bay_start_s_metres = bay_index as f32 * TUNNEL_BAY_LENGTH_METRES;
 
             let bay_led_fixtures = led_tube_fixtures
@@ -534,7 +535,7 @@ impl SceneData {
             .collect();
         primitive_buffer.append(&primitive_data, &mut renderer.allocator);
 
-        let scene_instances = (0..bay_count)
+        let scene_instances = (0..BAY_COUNT)
             .map(|bay_index| SceneInstance {
                 bay_index: bay_index as u32,
                 blas_index: bay_index,
@@ -552,7 +553,7 @@ impl SceneData {
 
         // Create our lights
         let tunnel_lights =
-            generate_tunnel_lights(track, &led_tube_fixtures, &lower_strip_fixtures);
+            generate_tunnel_lights(track, BAY_COUNT, &led_tube_fixtures, &lower_strip_fixtures);
 
         // Upload to the light buffer
         light_buffer.append(&tunnel_lights, &mut renderer.allocator);
@@ -1270,46 +1271,52 @@ unsafe impl bytemuck::Pod for TunnelLight {}
 
 fn generate_tunnel_lights(
     track: &Track,
+    bay_count: usize,
     led_fixtures: &[mesh_generation::LedTubeFixture],
     lower_strip_fixtures: &[mesh_generation::LowerStripFixture],
 ) -> Vec<TunnelLight> {
-    let mut lights = Vec::with_capacity(led_fixtures.len() + lower_strip_fixtures.len());
+    let mut lights = Vec::with_capacity(bay_count * TUNNEL_LIGHTS_PER_BAY);
 
-    lights.extend(led_fixtures.iter().map(|fixture| {
-        let center_s_metres = fixture.start_s_metres + fixture.length_metres * 0.5;
-        let frame = track.sample(center_s_metres);
+    debug_assert_eq!(led_fixtures.len(), bay_count);
+    debug_assert_eq!(lower_strip_fixtures.len(), bay_count);
 
-        let position = frame.origin + frame.right * fixture.x_metres + frame.up * fixture.y_metres;
+    for bay_index in 0..bay_count {
+        let led = led_fixtures[bay_index];
+        let led_center_s_metres = led.start_s_metres + led.length_metres * 0.5;
+        let led_frame = track.sample(led_center_s_metres);
 
-        TunnelLight {
-            position,
-            radius_metres: fixture.radius_metres,
-            colour: fixture.colour,
-            intensity: fixture.intensity,
-            start_s_metres: fixture.start_s_metres,
-        }
-    }));
+        lights.push(TunnelLight {
+            position: led_frame.origin
+                + led_frame.right * led.x_metres
+                + led_frame.up * led.y_metres,
+            radius_metres: led.radius_metres,
+            colour: led.colour,
+            intensity: led.intensity,
+            start_s_metres: led.start_s_metres,
+        });
 
-    for fixture in lower_strip_fixtures {
-        for tile in mesh_generation::lower_strip_tiles(fixture) {
+        let strip = lower_strip_fixtures[bay_index];
+        let strip_tiles = mesh_generation::lower_strip_tiles(&strip);
+        debug_assert_eq!(strip_tiles.len(), LOWER_STRIP_LIGHTS_PER_BAY);
+
+        for tile in strip_tiles {
             let center_s_metres = (tile.start_s_metres + tile.end_s_metres) * 0.5;
             let frame = track.sample(center_s_metres);
-
-            let inward_face_x_metres = fixture.x_metres - fixture.half_width_metres;
-
-            let position =
-                frame.origin + frame.right * inward_face_x_metres + frame.up * fixture.y_metres;
+            let inward_face_x_metres = strip.x_metres - strip.half_width_metres;
 
             lights.push(TunnelLight {
-                position,
-                radius_metres: fixture.radius_metres,
-                colour: fixture.colour,
-                intensity: fixture.intensity,
+                position: frame.origin
+                    + frame.right * inward_face_x_metres
+                    + frame.up * strip.y_metres,
+                radius_metres: strip.radius_metres,
+                colour: strip.colour,
+                intensity: strip.intensity,
                 start_s_metres: tile.start_s_metres,
             });
         }
     }
 
+    debug_assert_eq!(lights.len(), bay_count * TUNNEL_LIGHTS_PER_BAY);
     lights
 }
 
