@@ -2,14 +2,15 @@ use std::sync::Arc;
 
 use anyhow::Context;
 use lazy_vulkan::{
-    BufferAllocation, FULL_IMAGE, LayerInfo, PipelineOptions, SubRenderer,
+    BufferAllocation, FULL_IMAGE, LayerInfo, PipelineOptions, SlabUpload, SubRenderer,
     vk::{self, Packed24_8},
 };
-use lazy_vulkan_gltf::{NO_TEXTURE, TextureID};
+use lazy_vulkan_gltf::{GPUMaterial, NO_TEXTURE, TextureID};
 
 use crate::{
     demo_state::{DemoState, TRACK_LENGTH_METRES},
     graphics::{RenderState, RenderStateFamily},
+    material_loader,
     mesh_generation::{
         self, TUNNEL_BAY_LENGTH_METRES, generate_cable_tray, generate_led_tube_fixtures,
         generate_led_tubes, generate_lower_strip_fixtures, generate_lower_strip_lights,
@@ -416,6 +417,8 @@ impl SceneData {
 
         let mut scene_primitives = Vec::with_capacity(BAY_COUNT * BAY_GEOMETRY_KIND_COUNT);
 
+        let concrete_shell_material = material_loader::load_material(renderer, "concrete_shell");
+
         for bay_index in 0..BAY_COUNT {
             let bay_start_s_metres = bay_index as f32 * TUNNEL_BAY_LENGTH_METRES;
 
@@ -437,7 +440,7 @@ impl SceneData {
                 })
                 .collect::<Vec<_>>();
 
-            let tunnel = create_scene_primitive(
+            let tunnel = create_scene_primitive_with_material(
                 renderer,
                 &mut vertex_buffer,
                 &mut index_buffer,
@@ -447,7 +450,7 @@ impl SceneData {
                     TUNNEL_BAY_LENGTH_METRES,
                     Default::default(),
                 ),
-                glam::vec4(0.55, 0.57, 0.56, 1.0),
+                &concrete_shell_material,
             );
 
             let slab_bed = create_scene_primitive(
@@ -568,6 +571,28 @@ impl SceneData {
             tunnel_lights,
             light_buffer,
         }
+    }
+}
+
+fn create_scene_primitive_with_material(
+    renderer: &mut lazy_vulkan::Renderer<RenderStateFamily>,
+    vertex_buffer: &mut BufferAllocation<lazy_vulkan_gltf::Vertex>,
+    index_buffer: &mut BufferAllocation<u32>,
+    mesh: mesh_generation::GeneratedMesh,
+    material: &SlabUpload<GPUMaterial>,
+) -> ScenePrimitive {
+    let indices = index_buffer.tip_address();
+    index_buffer.append(&mesh.indices, &mut renderer.allocator);
+
+    let vertices = vertex_buffer.tip_address();
+    vertex_buffer.append(&mesh.vertices, &mut renderer.allocator);
+
+    ScenePrimitive {
+        indices,
+        vertices,
+        index_count: mesh.indices.len() as u32,
+        vertex_count: mesh.vertices.len() as u32,
+        material: material.device_address,
     }
 }
 

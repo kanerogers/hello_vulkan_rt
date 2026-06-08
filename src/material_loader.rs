@@ -1,12 +1,12 @@
 use std::path::{Path, PathBuf};
 
-use lazy_vulkan::{Renderer, StateFamily, vk};
+use lazy_vulkan::{Renderer, SlabUpload, StateFamily, vk};
 use lazy_vulkan_gltf::{GPUMaterial, TextureID};
 
 pub fn load_material<SF: StateFamily>(
     renderer: &mut Renderer<SF>,
     name: impl AsRef<str>,
-) -> GPUMaterial {
+) -> SlabUpload<GPUMaterial> {
     let material_dir = Path::new("assets").join(name.as_ref());
 
     let base_colour = load_texture(
@@ -28,14 +28,16 @@ pub fn load_material<SF: StateFamily>(
         vk::Format::R8G8B8A8_UNORM,
     );
 
-    GPUMaterial {
+    let material = GPUMaterial {
         base_colour_factor: glam::Vec4::ONE,
         emissive_colour_factor: glam::Vec3::ZERO,
         base_colour_texture: base_colour,
         normal_texture: normal,
         metallic_roughness_texture: orm,
         ao_texture: orm,
-    }
+    };
+
+    renderer.allocator.upload_to_slab(&[material])
 }
 
 fn load_texture<SF: StateFamily>(
