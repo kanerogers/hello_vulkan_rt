@@ -4,6 +4,9 @@ ConstantBuffer<Registers, ScalarDataLayout> registers;
 [[vk::binding(0, 0)]]
 RaytracingAccelerationStructure tlas;
 
+[[vk::binding(0, 1)]]
+Sampler2D<float4> textures[];
+
 struct Vertex {
   float3 position;
   float3 normal;
@@ -79,3 +82,5 @@ static const uint LOWER_STRIP_LIGHTS_PER_BAY = 25;
 static const uint TUNNEL_LIGHTS_PER_BAY = 1 + LOWER_STRIP_LIGHTS_PER_BAY;
 static const uint LED_LIGHT_OFFSET_IN_BAY = 0;
 static const uint LOWER_STRIP_LIGHT_OFFSET_IN_BAY = 1;
+
+static const uint NO_TEXTURE = 4294967295;

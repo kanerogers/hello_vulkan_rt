@@ -1,5 +1,6 @@
 mod demo_state;
 mod graphics;
+pub mod material_loader;
 mod mesh_generation;
 mod rt_renderer;
 mod track;

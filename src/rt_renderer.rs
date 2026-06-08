@@ -43,7 +43,7 @@ pub struct RTRenderer {
     pipeline: vk::Pipeline,
     pipeline_layout: vk::PipelineLayout,
     tonemapping_pipeline: lazy_vulkan::Pipeline,
-    tonemapping_descriptor_set: vk::DescriptorSet,
+    renderer_descriptor_set: vk::DescriptorSet,
     #[allow(unused)]
     descriptor_pool: vk::DescriptorPool,
     descriptor_set: vk::DescriptorSet,
@@ -128,7 +128,7 @@ impl RTRenderer {
         let pipeline_layout = unsafe {
             device.create_pipeline_layout(
                 &vk::PipelineLayoutCreateInfo::default()
-                    .set_layouts(&[layout])
+                    .set_layouts(&[layout, renderer.descriptors.layout])
                     .push_constant_ranges(&[vk::PushConstantRange::default()
                         .stage_flags(
                             vk::ShaderStageFlags::RAYGEN_KHR
@@ -162,7 +162,7 @@ impl RTRenderer {
             pipeline,
             pipeline_layout,
             tonemapping_pipeline,
-            tonemapping_descriptor_set: renderer.descriptors.set,
+            renderer_descriptor_set: renderer.descriptors.set,
             scene_data,
         }
     }
@@ -245,7 +245,7 @@ impl<'a> SubRenderer<'a> for RTRenderer {
                 vk::PipelineBindPoint::RAY_TRACING_KHR,
                 self.pipeline_layout,
                 0,
-                &[self.descriptor_set],
+                &[self.descriptor_set, self.renderer_descriptor_set],
                 &[],
             );
             context.cmd_pipeline_barrier2(
@@ -358,7 +358,7 @@ impl<'a> SubRenderer<'a> for RTRenderer {
                 vk::PipelineBindPoint::GRAPHICS,
                 self.tonemapping_pipeline.layout,
                 0,
-                &[self.tonemapping_descriptor_set],
+                &[self.renderer_descriptor_set],
                 &[],
             );
             device.cmd_draw(command_buffer, 3, 1, 0, 0);
