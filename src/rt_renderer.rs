@@ -420,6 +420,8 @@ impl SceneData {
         let concrete_shell_material = material_loader::load_material(renderer, "concrete_shell");
         let concrete_floor_material = material_loader::load_material(renderer, "concrete_floor");
         let rail_material = material_loader::load_material(renderer, "rail_steel");
+        let galvanized_metal_material =
+            material_loader::load_material(renderer, "galvanized_metal");
 
         for bay_index in 0..BAY_COUNT {
             let bay_start_s_metres = bay_index as f32 * TUNNEL_BAY_LENGTH_METRES;
@@ -479,12 +481,12 @@ impl SceneData {
                 &concrete_floor_material,
             );
 
-            let cable_tray = create_scene_primitive(
+            let cable_tray = create_scene_primitive_with_material(
                 renderer,
                 &mut vertex_buffer,
                 &mut index_buffer,
                 generate_cable_tray(track, bay_start_s_metres, TUNNEL_BAY_LENGTH_METRES),
-                glam::vec4(0.42, 0.43, 0.41, 1.0),
+                &galvanized_metal_material,
             );
 
             let led_tubes = create_scene_primitive_with_emission(
@@ -596,23 +598,6 @@ fn create_scene_primitive_with_material(
         vertex_count: mesh.vertices.len() as u32,
         material: material.device_address,
     }
-}
-
-fn create_scene_primitive(
-    renderer: &mut lazy_vulkan::Renderer<RenderStateFamily>,
-    vertex_buffer: &mut BufferAllocation<lazy_vulkan_gltf::Vertex>,
-    index_buffer: &mut BufferAllocation<u32>,
-    mesh: mesh_generation::GeneratedMesh,
-    base_colour_factor: glam::Vec4,
-) -> ScenePrimitive {
-    create_scene_primitive_with_emission(
-        renderer,
-        vertex_buffer,
-        index_buffer,
-        mesh,
-        base_colour_factor,
-        glam::Vec3::ZERO,
-    )
 }
 
 fn create_scene_primitive_with_emission(

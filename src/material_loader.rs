@@ -68,24 +68,34 @@ fn load_orm_texture<SF: StateFamily>(
         );
     }
 
-    let ao = decode_png_channel(&required_texture_path(material_dir, "ao.png"));
     let roughness = decode_png_channel(&required_texture_path(material_dir, "roughness.png"));
     let metalness = decode_png_channel(&required_texture_path(material_dir, "metalness.png"));
 
     assert_eq!(
-        ao.extent,
         roughness.extent,
-        "ao.png and roughness.png must have matching dimensions in {}",
-        material_dir.display()
-    );
-    assert_eq!(
-        ao.extent,
         metalness.extent,
-        "ao.png and metalness.png must have matching dimensions in {}",
+        "roughness.png and metalness.png must have matching dimensions in {}",
         material_dir.display()
     );
 
-    let pixel_count = (ao.extent.width * ao.extent.height) as usize;
+    let pixel_count = (roughness.extent.width * roughness.extent.height) as usize;
+    let ao_path = material_dir.join("ao.png");
+    let ao = if ao_path.exists() {
+        let ao = decode_png_channel(&ao_path);
+        assert_eq!(
+            roughness.extent,
+            ao.extent,
+            "roughness.png and ao.png must have matching dimensions in {}",
+            material_dir.display()
+        );
+        ao
+    } else {
+        DecodedChannel {
+            extent: roughness.extent,
+            values: vec![255; pixel_count],
+        }
+    };
+
     let mut orm_pixels = Vec::with_capacity(pixel_count * 4);
 
     for pixel_index in 0..pixel_count {
@@ -98,7 +108,7 @@ fn load_orm_texture<SF: StateFamily>(
     let image = renderer.create_image(
         format!("{} packed orm", material_dir.display()),
         vk::Format::R8G8B8A8_UNORM,
-        ao.extent,
+        roughness.extent,
         orm_pixels,
         vk::ImageUsageFlags::SAMPLED,
     );

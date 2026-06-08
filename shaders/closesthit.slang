@@ -42,7 +42,19 @@ void main(inout HitPayload payload,
       v0.uv * barycentrics.x + v1.uv * barycentrics.y + v2.uv * barycentrics.z;
 
   if (geometryKind == GEOMETRY_KIND_TUNNEL_SHELL) {
-    uv *= 0.5;
+    uv *= 0.1;
+  }
+
+  if (geometryKind == GEOMETRY_KIND_SLAB_BED) {
+    uv *= 0.1;
+  }
+
+  if (geometryKind == GEOMETRY_KIND_RAILS) {
+    uv *= 0.1;
+  }
+
+  if (geometryKind == GEOMETRY_KIND_CABLE_TRAY) {
+    uv *= 2.0;
   }
 
   // Position
