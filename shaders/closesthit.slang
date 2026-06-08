@@ -83,7 +83,7 @@ void main(inout HitPayload payload,
   if (material.baseColourTextureID != NO_TEXTURE) {
     let sampledBaseColour =
         textures[NonUniformResourceIndex(material.baseColourTextureID)]
-            .Sample(uv)
+            .SampleLevelZero(uv, 0)
             .rgb;
 
     baseAlbedo *= sampledBaseColour;
@@ -98,7 +98,7 @@ void main(inout HitPayload payload,
   if (material.metallicRoughnessTextureID != NO_TEXTURE) {
     let orm =
         textures[NonUniformResourceIndex(material.metallicRoughnessTextureID)]
-            .Sample(uv)
+            .SampleLevelZero(uv, 0)
             .rgb;
 
     ambientOcclusion = orm.r;
@@ -106,8 +106,16 @@ void main(inout HitPayload payload,
     metalness = saturate(orm.b);
   }
 
+  let aoDistanceMetres = 2.0f;
+  let aoRayOrigin = worldPosition + worldNormal * 0.01f;
+  let aoRayDirection = normalize(worldNormal + float3(0.37f, 0.61f, 0.19f));
+
+  let aoVisible =
+      traceVisibilityRay(aoRayOrigin, aoRayDirection, 0.02f, aoDistanceMetres);
+  let ao = aoVisible ? 1.0f : 0.55f;
+
   let diffuseAlbedo = albedo * (1.0 - metalness);
-  let ambientTerm = 0.01 * ambientOcclusion;
+  let ambientTerm = 0.01 * ambientOcclusion * ao;
 
   var directLight = float3(0.0);
   let activeRangeMetres = 80.0;
@@ -236,11 +244,35 @@ float3 applyNormalMap(Material material, float2 uv, float3 worldNormal,
 
   var tangentNormal =
       textures[NonUniformResourceIndex(material.normalTextureID)]
-              .Sample(uv)
+              .SampleLevelZero(uv, 0)
               .xyz *
           2.0 -
       1.0;
 
   return normalize(tangent * tangentNormal.x + bitangent * tangentNormal.y +
                    worldNormal * tangentNormal.z);
+}
+
+bool traceVisibilityRay(float3 origin, float3 direction, float rayTMin,
+                        float rayTMax) {
+  if (rayTMax <= rayTMin) {
+    return true;
+  }
+
+  RayDesc ray;
+  ray.Origin = origin;
+  ray.Direction = normalize(direction);
+  ray.TMin = rayTMin;
+  ray.TMax = rayTMax;
+
+  ShadowPayload payload;
+  payload.hit = true;
+
+  TraceRay(tlas,
+           RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH | RAY_FLAG_FORCE_OPAQUE |
+               RAY_FLAG_SKIP_CLOSEST_HIT_SHADER,
+           0xFF, RAY_TYPE_RADIANCE, HIT_SBT_STRIDE_IGNORE_GEOMETRY,
+           MISS_TYPE_SHADOW, ray, payload);
+
+  return !payload.hit;
 }
