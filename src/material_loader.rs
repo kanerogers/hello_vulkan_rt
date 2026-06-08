@@ -1,4 +1,7 @@
-use std::path::{Path, PathBuf};
+use std::{
+    fs::File,
+    path::{Path, PathBuf},
+};
 
 use lazy_vulkan::{Renderer, SlabUpload, StateFamily, vk};
 use lazy_vulkan_gltf::{GPUMaterial, TextureID};
@@ -21,12 +24,7 @@ pub fn load_material<SF: StateFamily>(
         "normal.png",
         vk::Format::R8G8B8A8_UNORM,
     );
-    let orm = load_texture(
-        renderer,
-        &material_dir,
-        "orm.png",
-        vk::Format::R8G8B8A8_UNORM,
-    );
+    let orm = load_orm_texture(renderer, &material_dir);
 
     let material = GPUMaterial {
         base_colour_factor: glam::Vec4::ONE,
@@ -54,6 +52,103 @@ fn load_texture<SF: StateFamily>(
     );
 
     image.id.into()
+}
+
+fn load_orm_texture<SF: StateFamily>(
+    renderer: &mut Renderer<SF>,
+    material_dir: &Path,
+) -> TextureID {
+    let orm_path = material_dir.join("orm.png");
+    if orm_path.exists() {
+        return load_texture(
+            renderer,
+            material_dir,
+            "orm.png",
+            vk::Format::R8G8B8A8_UNORM,
+        );
+    }
+
+    let ao = decode_png_channel(&required_texture_path(material_dir, "ao.png"));
+    let roughness = decode_png_channel(&required_texture_path(material_dir, "roughness.png"));
+    let metalness = decode_png_channel(&required_texture_path(material_dir, "metalness.png"));
+
+    assert_eq!(
+        ao.extent,
+        roughness.extent,
+        "ao.png and roughness.png must have matching dimensions in {}",
+        material_dir.display()
+    );
+    assert_eq!(
+        ao.extent,
+        metalness.extent,
+        "ao.png and metalness.png must have matching dimensions in {}",
+        material_dir.display()
+    );
+
+    let pixel_count = (ao.extent.width * ao.extent.height) as usize;
+    let mut orm_pixels = Vec::with_capacity(pixel_count * 4);
+
+    for pixel_index in 0..pixel_count {
+        orm_pixels.push(ao.values[pixel_index]);
+        orm_pixels.push(roughness.values[pixel_index]);
+        orm_pixels.push(metalness.values[pixel_index]);
+        orm_pixels.push(255);
+    }
+
+    let image = renderer.create_image(
+        format!("{} packed orm", material_dir.display()),
+        vk::Format::R8G8B8A8_UNORM,
+        ao.extent,
+        orm_pixels,
+        vk::ImageUsageFlags::SAMPLED,
+    );
+
+    image.id.into()
+}
+
+struct DecodedChannel {
+    extent: vk::Extent2D,
+    values: Vec<u8>,
+}
+
+fn decode_png_channel(path: &Path) -> DecodedChannel {
+    let file = File::open(path).unwrap_or_else(|error| {
+        panic!("failed to open texture {}: {error}", path.display());
+    });
+
+    let mut decoder = png::Decoder::new(file);
+    decoder.set_transformations(png::Transformations::EXPAND | png::Transformations::STRIP_16);
+
+    let mut reader = decoder.read_info().unwrap_or_else(|error| {
+        panic!("failed to read PNG info for {}: {error}", path.display());
+    });
+
+    let mut pixels = vec![0; reader.output_buffer_size()];
+    let info = reader.next_frame(&mut pixels).unwrap_or_else(|error| {
+        panic!("failed to decode PNG {}: {error}", path.display());
+    });
+
+    let pixels = &pixels[..info.buffer_size()];
+    let channel_count = match info.color_type {
+        png::ColorType::Grayscale => 1,
+        png::ColorType::Rgb => 3,
+        png::ColorType::Indexed => 3,
+        png::ColorType::GrayscaleAlpha => 2,
+        png::ColorType::Rgba => 4,
+    };
+
+    let values = pixels
+        .chunks_exact(channel_count)
+        .map(|channels| channels[0])
+        .collect::<Vec<_>>();
+
+    DecodedChannel {
+        extent: vk::Extent2D {
+            width: info.width,
+            height: info.height,
+        },
+        values,
+    }
 }
 
 fn required_texture_path(material_dir: &Path, file_name: &str) -> PathBuf {

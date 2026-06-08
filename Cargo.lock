@@ -691,6 +691,7 @@ dependencies = [
  "lazy_vulkan",
  "lazy_vulkan_gltf",
  "log",
+ "png 0.17.16",
  "shader-slang",
  "winit",
 ]

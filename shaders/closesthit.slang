@@ -41,7 +41,9 @@ void main(inout HitPayload payload,
   var uv =
       v0.uv * barycentrics.x + v1.uv * barycentrics.y + v2.uv * barycentrics.z;
 
-  uv *= 0.5;
+  if (geometryKind == GEOMETRY_KIND_TUNNEL_SHELL) {
+    uv *= 0.5;
+  }
 
   // Position
   let position = v0.position * barycentrics.x + v1.position * barycentrics.y +

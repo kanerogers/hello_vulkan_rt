@@ -418,6 +418,8 @@ impl SceneData {
         let mut scene_primitives = Vec::with_capacity(BAY_COUNT * BAY_GEOMETRY_KIND_COUNT);
 
         let concrete_shell_material = material_loader::load_material(renderer, "concrete_shell");
+        let concrete_floor_material = material_loader::load_material(renderer, "concrete_floor");
+        let rail_material = material_loader::load_material(renderer, "rail_steel");
 
         for bay_index in 0..BAY_COUNT {
             let bay_start_s_metres = bay_index as f32 * TUNNEL_BAY_LENGTH_METRES;
@@ -453,28 +455,28 @@ impl SceneData {
                 &concrete_shell_material,
             );
 
-            let slab_bed = create_scene_primitive(
+            let slab_bed = create_scene_primitive_with_material(
                 renderer,
                 &mut vertex_buffer,
                 &mut index_buffer,
                 generate_slab_bed(track, bay_start_s_metres, TUNNEL_BAY_LENGTH_METRES),
-                glam::vec4(0.32, 0.33, 0.33, 1.0),
+                &concrete_floor_material,
             );
 
-            let rails = create_scene_primitive(
+            let rails = create_scene_primitive_with_material(
                 renderer,
                 &mut vertex_buffer,
                 &mut index_buffer,
                 generate_rails(track, bay_start_s_metres, TUNNEL_BAY_LENGTH_METRES),
-                glam::vec4(0.10, 0.105, 0.11, 1.0),
+                &rail_material,
             );
 
-            let service_walkway = create_scene_primitive(
+            let service_walkway = create_scene_primitive_with_material(
                 renderer,
                 &mut vertex_buffer,
                 &mut index_buffer,
                 generate_service_walkway(track, bay_start_s_metres, TUNNEL_BAY_LENGTH_METRES),
-                glam::vec4(0.55, 0.57, 0.56, 1.0),
+                &concrete_floor_material,
             );
 
             let cable_tray = create_scene_primitive(
