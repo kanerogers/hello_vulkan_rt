@@ -47,13 +47,18 @@ void main(inout HitPayload payload,
   Material material = *primitive.material;
   float3 emittance = material.emissiveColourFactor * 0.1;
 
-  float3 baseAlbedo;
+  var baseAlbedo = material.baseColourFactor.rgb;
 
-  if (material.baseColourTextureID == NO_TEXTURE) {
-    baseAlbedo = material.baseColourFactor.rgb;
-  } else {
-    baseAlbedo = material.baseColourFactor.rgb;
+  if (material.baseColourTextureID != NO_TEXTURE) {
+    let sampledBaseColour =
+        textures[NonUniformResourceIndex(material.baseColourTextureID)]
+            .Sample(uv)
+            .rgb;
+
+    baseAlbedo *= sampledBaseColour;
   }
+
+  baseAlbedo = saturate(baseAlbedo);
 
   var panelBand = 1.;
 
