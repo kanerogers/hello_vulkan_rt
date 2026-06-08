@@ -10,6 +10,17 @@ void main(inout HitPayload payload,
   let primitiveIndex = bayId * BAY_GEOMETRY_KIND_COUNT + geometryKind;
 
   Primitive primitive = registers.primitiveBuffer[primitiveIndex];
+  Material material = *primitive.material;
+
+  let emissive = material.emissiveColourFactor;
+
+  // If this is emissive, ie. a light, nothing more to do
+  if (isEmissiveGeometry(geometryKind)) {
+    payload.hitValue = emissive;
+    payload.weight = float3(0.0);
+    payload.depth = 100;
+    return;
+  }
 
   uint indexOffset = 3 * PrimitiveIndex();
 
@@ -26,9 +37,11 @@ void main(inout HitPayload payload,
   Vertex v1 = primitive.vertexBuffer[triangleIndex.y];
   Vertex v2 = primitive.vertexBuffer[triangleIndex.z];
 
-  // Get the uv
-  let uv =
+  // Get the UV
+  var uv =
       v0.uv * barycentrics.x + v1.uv * barycentrics.y + v2.uv * barycentrics.z;
+
+  uv *= 0.5;
 
   // Position
   let position = v0.position * barycentrics.x + v1.position * barycentrics.y +
@@ -37,6 +50,10 @@ void main(inout HitPayload payload,
   float3x4 objectToWorld = ObjectToWorld3x4();
   float3 worldPosition = mul(objectToWorld, float4(position, 1.0));
 
+  let worldP0 = mul(objectToWorld, float4(v0.position, 1.0)).xyz;
+  let worldP1 = mul(objectToWorld, float4(v1.position, 1.0)).xyz;
+  let worldP2 = mul(objectToWorld, float4(v2.position, 1.0)).xyz;
+
   float3 normal = v0.normal * barycentrics.x + v1.normal * barycentrics.y +
                   v2.normal * barycentrics.z;
 
@@ -44,8 +61,8 @@ void main(inout HitPayload payload,
   float4 transformedNormal = mul(normal, worldToObject);
   float3 worldNormal = normalize(transformedNormal.xyz);
 
-  Material material = *primitive.material;
-  float3 emittance = material.emissiveColourFactor * 0.1;
+  worldNormal = applyNormalMap(material, uv, worldNormal, worldP0, worldP1,
+                               worldP2, v0.uv, v1.uv, v2.uv);
 
   var baseAlbedo = material.baseColourFactor.rgb;
 
@@ -58,27 +75,27 @@ void main(inout HitPayload payload,
     baseAlbedo *= sampledBaseColour;
   }
 
-  baseAlbedo = saturate(baseAlbedo);
+  var albedo = saturate(baseAlbedo);
 
-  var panelBand = 1.;
+  var ambientOcclusion = 1.0;
+  var roughness = 0.85;
+  var metalness = 0.0;
 
-  if (geometryKind == GEOMETRY_KIND_TUNNEL_SHELL) {
-    let panelPhase = frac(uv.y / registers.tunnelBayLengthMetres);
-    panelBand = panelPhase < 0.0100 ? 0.05 : 1.0;
+  if (material.metallicRoughnessTextureID != NO_TEXTURE) {
+    let orm =
+        textures[NonUniformResourceIndex(material.metallicRoughnessTextureID)]
+            .Sample(uv)
+            .rgb;
+
+    ambientOcclusion = orm.r;
+    roughness = saturate(orm.g);
+    metalness = saturate(orm.b);
   }
 
-  let albedo = saturate(baseAlbedo * panelBand);
-
-  let emissive = material.emissiveColourFactor;
-  if (isEmissiveGeometry(geometryKind)) {
-    payload.hitValue = emissive;
-    payload.weight = float3(0.0);
-    payload.depth = 100;
-    return;
-  }
+  let diffuseAlbedo = albedo * (1.0 - metalness);
+  let ambientTerm = 0.01 * ambientOcclusion;
 
   var directLight = float3(0.0);
-
   let activeRangeMetres = 80.0;
 
   let bayCount = max(registers.lightCount / TUNNEL_LIGHTS_PER_BAY, 1u);
@@ -98,23 +115,20 @@ void main(inout HitPayload payload,
                                        LED_LIGHT_OFFSET_IN_BAY,
                                    worldPosition, worldNormal);
 
-  if (!receivesLowerStripLighting(geometryKind)) {
-    payload.hitValue = emissive + albedo * (0.01 + directLight);
-    payload.weight = float3(0.0);
-    payload.depth = 100;
-    return;
+  if (receivesLowerStripLighting(geometryKind)) {
+    let stripBase =
+        bayId * TUNNEL_LIGHTS_PER_BAY + LOWER_STRIP_LIGHT_OFFSET_IN_BAY;
+
+    for (uint stripLightIndex = 0; stripLightIndex < LOWER_STRIP_LIGHTS_PER_BAY;
+         stripLightIndex++) {
+      directLight += sampleTunnelLight(stripBase + stripLightIndex,
+                                       worldPosition, worldNormal);
+    }
   }
 
-  let stripBase =
-      bayId * TUNNEL_LIGHTS_PER_BAY + LOWER_STRIP_LIGHT_OFFSET_IN_BAY;
+  float3 finalColour = emissive + albedo * (0.01 + directLight);
 
-  for (uint stripLightIndex = 0; stripLightIndex < LOWER_STRIP_LIGHTS_PER_BAY;
-       stripLightIndex++) {
-    directLight += sampleTunnelLight(stripBase + stripLightIndex, worldPosition,
-                                     worldNormal);
-  }
-
-  payload.hitValue = emissive + albedo * (0.01 + directLight);
+  payload.hitValue = finalColour;
   payload.weight = float3(0.0);
   payload.depth = 100;
 
@@ -177,4 +191,42 @@ bool receivesLowerStripLighting(uint geometryKind) {
          geometryKind == GEOMETRY_KIND_SLAB_BED ||
          geometryKind == GEOMETRY_KIND_RAILS ||
          geometryKind == GEOMETRY_KIND_SERVICE_WALKWAY;
+}
+
+float3 applyNormalMap(Material material, float2 uv, float3 worldNormal,
+                      float3 worldP0, float3 worldP1, float3 worldP2,
+                      float2 uv0, float2 uv1, float2 uv2) {
+  if (material.normalTextureID == NO_TEXTURE) {
+    return worldNormal;
+  }
+
+  let dp1 = worldP1 - worldP0;
+  let dp2 = worldP2 - worldP0;
+  let duv1 = uv1 - uv0;
+  let duv2 = uv2 - uv0;
+
+  let det = duv1.x * duv2.y - duv1.y * duv2.x;
+  if (abs(det) < 0.000001) {
+    return worldNormal;
+  }
+
+  let invDet = 1.0 / det;
+  var tangent = (dp1 * duv2.y - dp2 * duv1.y) * invDet;
+  var bitangent = (dp2 * duv1.x - dp1 * duv2.x) * invDet;
+
+  tangent = normalize(tangent - worldNormal * dot(worldNormal, tangent));
+
+  let handedness =
+      dot(cross(tangent, bitangent), worldNormal) < 0.0 ? -1.0 : 1.0;
+  bitangent = normalize(cross(worldNormal, tangent) * handedness);
+
+  var tangentNormal =
+      textures[NonUniformResourceIndex(material.normalTextureID)]
+              .Sample(uv)
+              .xyz *
+          2.0 -
+      1.0;
+
+  return normalize(tangent * tangentNormal.x + bitangent * tangentNormal.y +
+                   worldNormal * tangentNormal.z);
 }
