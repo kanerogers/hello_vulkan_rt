@@ -68,6 +68,13 @@ static const uint BAY_GEOMETRY_KIND_COUNT = 7;
 static const uint GEOMETRY_KIND_TUNNEL_SHELL = 0;
 static const uint HIT_SBT_STRIDE_IGNORE_GEOMETRY = 0;
 
+static const uint GEOMETRY_KIND_SLAB_BED = 1;
+static const uint GEOMETRY_KIND_RAILS = 2;
+static const uint GEOMETRY_KIND_SERVICE_WALKWAY = 3;
+static const uint GEOMETRY_KIND_CABLE_TRAY = 4;
+static const uint GEOMETRY_KIND_LED_TUBES = 5;
+static const uint GEOMETRY_KIND_LOWER_STRIPS = 6;
+
 static const uint LOWER_STRIP_LIGHTS_PER_BAY = 25;
 static const uint TUNNEL_LIGHTS_PER_BAY = 1 + LOWER_STRIP_LIGHTS_PER_BAY;
 static const uint LED_LIGHT_OFFSET_IN_BAY = 0;

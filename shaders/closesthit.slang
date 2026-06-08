@@ -47,15 +47,6 @@ void main(inout HitPayload payload,
   Material material = *primitive.material;
   float3 emittance = material.emissiveColourFactor * 0.1;
 
-  float3 tangent;
-  float3 bitangent;
-  createCoordinateSystem(worldNormal, tangent, bitangent);
-
-  float3 rayDirection =
-      samplingHemisphere(payload.seed, tangent, bitangent, worldNormal);
-  float cosTheta = dot(rayDirection, worldNormal);
-  float p = cosTheta / M_PI;
-
   let baseAlbedo = saturate(material.baseColourFactor.rgb);
 
   var panelBand = 1.;
@@ -67,14 +58,13 @@ void main(inout HitPayload payload,
 
   let albedo = saturate(baseAlbedo * panelBand);
 
-  float3 brdf = albedo / M_PI;
-
-  payload.rayOrigin = worldPosition;
-  payload.rayDirection = rayDirection;
-  // payload.hitValue = emittance;
-  // payload.weight = brdf * cosTheta / p;
-
   let emissive = material.emissiveColourFactor;
+  if (isEmissiveGeometry(geometryKind)) {
+    payload.hitValue = emissive;
+    payload.weight = float3(0.0);
+    payload.depth = 100;
+    return;
+  }
 
   var directLight = float3(0.0);
 
@@ -96,6 +86,13 @@ void main(inout HitPayload payload,
   directLight += sampleTunnelLight(nextBay * TUNNEL_LIGHTS_PER_BAY +
                                        LED_LIGHT_OFFSET_IN_BAY,
                                    worldPosition, worldNormal);
+
+  if (!receivesLowerStripLighting(geometryKind)) {
+    payload.hitValue = emissive + albedo * (0.01 + directLight);
+    payload.weight = float3(0.0);
+    payload.depth = 100;
+    return;
+  }
 
   let stripBase =
       bayId * TUNNEL_LIGHTS_PER_BAY + LOWER_STRIP_LIGHT_OFFSET_IN_BAY;
@@ -157,4 +154,16 @@ float3 sampleTunnelLight(uint lightIndex, float3 worldPosition,
   }
 
   return light.colour * light.intensity * ndotl * attenuation;
+}
+
+bool isEmissiveGeometry(uint geometryKind) {
+  return geometryKind == GEOMETRY_KIND_LED_TUBES ||
+         geometryKind == GEOMETRY_KIND_LOWER_STRIPS;
+}
+
+bool receivesLowerStripLighting(uint geometryKind) {
+  return geometryKind == GEOMETRY_KIND_TUNNEL_SHELL ||
+         geometryKind == GEOMETRY_KIND_SLAB_BED ||
+         geometryKind == GEOMETRY_KIND_RAILS ||
+         geometryKind == GEOMETRY_KIND_SERVICE_WALKWAY;
 }
