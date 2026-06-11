@@ -57,10 +57,6 @@ void main(inout HitPayload payload,
     uv *= 0.1;
   }
 
-  if (geometryKind == GEOMETRY_KIND_CABLE_TRAY) {
-    uv *= 2.0;
-  }
-
   // Position
   let position = v0.position * barycentrics.x + v1.position * barycentrics.y +
                  v2.position * barycentrics.z;

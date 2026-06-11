@@ -422,6 +422,8 @@ impl SceneData {
         let concrete_floor_material = material_loader::load_material(renderer, "concrete_floor");
         let studded_metal_material = material_loader::load_material(renderer, "studded_metal");
         let rail_material = material_loader::load_material(renderer, "rail_steel");
+        let speckled_plastic_material =
+            material_loader::load_material(renderer, "speckled_plastic");
         let galvanized_metal_material =
             material_loader::load_material(renderer, "galvanized_metal");
 
@@ -488,7 +490,7 @@ impl SceneData {
                 &mut vertex_buffer,
                 &mut index_buffer,
                 generate_cable_tray(track, bay_start_s_metres, TUNNEL_BAY_LENGTH_METRES),
-                &galvanized_metal_material,
+                &speckled_plastic_material,
             );
 
             let led_tubes = create_scene_primitive_with_emission(
