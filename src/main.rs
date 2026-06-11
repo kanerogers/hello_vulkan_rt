@@ -24,7 +24,7 @@ impl ApplicationHandler for App {
             .create_window(
                 WindowAttributes::default()
                     .with_title("Hello RT")
-                    .with_maximized(true),
+                    .with_inner_size(winit::dpi::PhysicalSize::new(1920, 1080)),
             )
             .unwrap();
 
@@ -69,6 +69,7 @@ impl ApplicationHandler for App {
 
                 state.last_frame_time = now;
                 state.fixed_time_accumulator_s += frame_time_s;
+                state.demo_state.record_frame(frame_time_s);
 
                 while state.fixed_time_accumulator_s >= FIXED_TIMESTEP_S {
                     state.demo_state.update(FIXED_TIMESTEP_S);

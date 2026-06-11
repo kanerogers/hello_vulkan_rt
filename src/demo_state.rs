@@ -12,9 +12,16 @@ pub struct DemoState {
     pub speed_mps: f32,
     pub target_speed_mps: f32,
     pub next_debug_log_s: f32,
+    pub debug_frame_count: u32,
+    pub debug_frame_time_s: f32,
 }
 
 impl DemoState {
+    pub fn record_frame(&mut self, frame_time_s: f32) {
+        self.debug_frame_count += 1;
+        self.debug_frame_time_s += frame_time_s;
+    }
+
     pub fn update(&mut self, dt: f32) {
         self.elapsed_s += dt;
         self.target_speed_mps = self.target_speed();
@@ -27,13 +34,23 @@ impl DemoState {
         if self.elapsed_s >= self.next_debug_log_s {
             self.next_debug_log_s += 1.0;
 
+            let fps = if self.debug_frame_time_s > 0.0 {
+                self.debug_frame_count as f32 / self.debug_frame_time_s
+            } else {
+                0.0
+            };
+
             log::info!(
-                "choOOoOO: elapsed={:.1}s, s={:.1}. speed={:.1}km/h target={:.1}km/h",
+                "choOOoOO: elapsed={:.1}s, s={:.1}. speed={:.1}km/h target={:.1}km/h fps={:.1}",
                 self.elapsed_s,
                 self.track_s_m,
                 self.speed_mps * 3.6,
-                self.target_speed_mps * 3.6
+                self.target_speed_mps * 3.6,
+                fps,
             );
+
+            self.debug_frame_count = 0;
+            self.debug_frame_time_s = 0.0;
         }
     }
 
@@ -54,6 +71,8 @@ impl Default for DemoState {
             speed_mps: Default::default(),
             target_speed_mps: FAST_SPEED_MPS,
             next_debug_log_s: Default::default(),
+            debug_frame_count: Default::default(),
+            debug_frame_time_s: Default::default(),
         }
     }
 }

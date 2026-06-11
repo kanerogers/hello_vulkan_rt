@@ -106,16 +106,17 @@ void main(inout HitPayload payload,
     metalness = saturate(orm.b);
   }
 
-  let aoDistanceMetres = 2.0f;
-  let aoRayOrigin = worldPosition + worldNormal * 0.01f;
-  let aoRayDirection = normalize(worldNormal + float3(0.37f, 0.61f, 0.19f));
+  // let aoDistanceMetres = 2.0f;
+  // let aoRayOrigin = worldPosition + worldNormal * 0.01f;
+  // let aoRayDirection = normalize(worldNormal + float3(0.37f, 0.61f, 0.19f));
 
-  let aoVisible =
-      traceVisibilityRay(aoRayOrigin, aoRayDirection, 0.02f, aoDistanceMetres);
-  let ao = aoVisible ? 1.0f : 0.55f;
+  // let aoVisible =
+  //     traceVisibilityRay(aoRayOrigin, aoRayDirection, 0.02f,
+  //     aoDistanceMetres);
+  // let ao = aoVisible ? 1.0f : 0.55f;
 
   let diffuseAlbedo = albedo * (1.0 - metalness);
-  let ambientTerm = 0.01 * ambientOcclusion * ao;
+  let ambientTerm = 0.01 * ambientOcclusion;
 
   var directLight = float3(0.0);
   let activeRangeMetres = 80.0;
@@ -148,7 +149,7 @@ void main(inout HitPayload payload,
     }
   }
 
-  float3 finalColour = emissive + albedo * (0.01 + directLight);
+  float3 finalColour = emissive + albedo * (ambientTerm + directLight);
 
   payload.hitValue = finalColour;
   payload.weight = float3(0.0);
