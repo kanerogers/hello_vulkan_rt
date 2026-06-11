@@ -12,9 +12,10 @@ use crate::{
     graphics::{RenderState, RenderStateFamily},
     material_loader,
     mesh_generation::{
-        self, TUNNEL_BAY_LENGTH_METRES, generate_cable_tray, generate_led_tube_fixtures,
-        generate_led_tubes, generate_lower_strip_fixtures, generate_lower_strip_lights,
-        generate_rails, generate_service_walkway, generate_slab_bed, generate_tunnel_shell,
+        self, LED_TUBE_LIGHT_INTENSITY, LOWER_STRIP_LIGHT_INTENSITY, TUNNEL_BAY_LENGTH_METRES,
+        generate_cable_tray, generate_led_tube_fixtures, generate_led_tubes,
+        generate_lower_strip_fixtures, generate_lower_strip_lights, generate_rails,
+        generate_service_walkway, generate_slab_bed, generate_tunnel_shell,
     },
     track::{Track, TrackFrame},
 };
@@ -419,6 +420,7 @@ impl SceneData {
 
         let concrete_shell_material = material_loader::load_material(renderer, "concrete_shell");
         let concrete_floor_material = material_loader::load_material(renderer, "concrete_floor");
+        let studded_metal_material = material_loader::load_material(renderer, "studded_metal");
         let rail_material = material_loader::load_material(renderer, "rail_steel");
         let galvanized_metal_material =
             material_loader::load_material(renderer, "galvanized_metal");
@@ -478,7 +480,7 @@ impl SceneData {
                 &mut vertex_buffer,
                 &mut index_buffer,
                 generate_service_walkway(track, bay_start_s_metres, TUNNEL_BAY_LENGTH_METRES),
-                &concrete_floor_material,
+                &studded_metal_material,
             );
 
             let cable_tray = create_scene_primitive_with_material(
@@ -495,7 +497,7 @@ impl SceneData {
                 &mut index_buffer,
                 generate_led_tubes(track, &bay_led_fixtures),
                 glam::vec4(0.82, 0.90, 1.0, 1.0),
-                glam::vec3(0.65, 0.85, 1.0) * 2.0,
+                glam::vec3(0.65, 0.85, 1.0) * LED_TUBE_LIGHT_INTENSITY,
             );
 
             let lower_strips = create_scene_primitive_with_emission(
@@ -504,7 +506,7 @@ impl SceneData {
                 &mut index_buffer,
                 generate_lower_strip_lights(track, &bay_lower_strip_fixtures),
                 glam::vec4(0.18, 0.35, 1.0, 1.0),
-                glam::vec3(0.15, 0.35, 1.0),
+                glam::vec3(0.15, 0.35, 1.0) * LOWER_STRIP_LIGHT_INTENSITY,
             );
 
             let mut bay_primitives = vec![tunnel; BAY_GEOMETRY_KIND_COUNT];

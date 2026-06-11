@@ -3,6 +3,10 @@ use lazy_vulkan_gltf::Vertex;
 
 pub const TUNNEL_BAY_LENGTH_METRES: f32 = 10.0;
 
+const SLAB_BED_RING_SPACING_M: f32 = 2.0;
+const SLAB_BED_HALF_WIDTH_M: f32 = 2.0;
+const SLAB_BED_Y_M: f32 = -1.08;
+
 pub const SERVICE_WALKWAY_INNER_X_METRES: f32 = 2.05;
 pub const SERVICE_WALKWAY_OUTER_X_METRES: f32 = 3.05;
 pub const SERVICE_WALKWAY_TOP_Y_METRES: f32 = -0.78;
@@ -10,11 +14,11 @@ pub const SERVICE_WALKWAY_BOTTOM_Y_METRES: f32 = -1.08;
 
 pub const LED_TUBE_LENGTH_METRES: f32 = 4.0;
 pub const LED_TUBE_X_METRES: f32 = 0.0;
-pub const LED_TUBE_Y_METRES: f32 = 3.52;
+pub const LED_TUBE_Y_METRES: f32 = 4.02;
 pub const LED_TUBE_HALF_WIDTH_METRES: f32 = 0.09;
 pub const LED_TUBE_HALF_HEIGHT_METRES: f32 = 0.035;
-pub const LED_TUBE_LIGHT_RADIUS_METRES: f32 = 7.0;
-pub const LED_TUBE_LIGHT_INTENSITY: f32 = 6.0;
+pub const LED_TUBE_LIGHT_RADIUS_METRES: f32 = 6.7;
+pub const LED_TUBE_LIGHT_INTENSITY: f32 = 5.0;
 
 pub const LOWER_STRIP_LENGTH_METRES: f32 = TUNNEL_BAY_LENGTH_METRES;
 pub const LOWER_STRIP_HALF_WIDTH_METRES: f32 = 0.015;
@@ -24,8 +28,8 @@ pub const LOWER_STRIP_X_METRES: f32 =
 pub const LOWER_STRIP_Y_METRES: f32 =
     (SERVICE_WALKWAY_TOP_Y_METRES + SERVICE_WALKWAY_BOTTOM_Y_METRES) * 0.5;
 pub const LOWER_STRIP_TILE_PITCH_METRES: f32 = 0.40;
-pub const LOWER_STRIP_TILE_GAP_METRES: f32 = 0.16;
-pub const LOWER_STRIP_LIGHT_RADIUS_METRES: f32 = 0.5;
+pub const LOWER_STRIP_TILE_GAP_METRES: f32 = 0.26;
+pub const LOWER_STRIP_LIGHT_RADIUS_METRES: f32 = 1.0;
 pub const LOWER_STRIP_LIGHT_INTENSITY: f32 = 1.0;
 
 pub struct GeneratedMesh {
@@ -141,11 +145,7 @@ pub fn generate_tunnel_shell(
 }
 
 pub fn generate_slab_bed(track: &Track, start_s_m: f32, length_m: f32) -> GeneratedMesh {
-    let ring_spacing_m = 2.0;
-    let half_width_m = 1.75;
-    let slab_y_m = -1.08;
-
-    let ring_count = (length_m / ring_spacing_m).ceil() as usize + 1;
+    let ring_count = (length_m / SLAB_BED_RING_SPACING_M).ceil() as usize + 1;
 
     let mut vertices = Vec::with_capacity(ring_count * 2);
     let mut indices = Vec::new();
@@ -155,10 +155,13 @@ pub fn generate_slab_bed(track: &Track, start_s_m: f32, length_m: f32) -> Genera
         let s_m = start_s_m + ring_t * length_m;
         let frame = track.sample(s_m);
 
-        for (side_index, x_m) in [-half_width_m, half_width_m].into_iter().enumerate() {
-            let position = frame.origin + frame.right * x_m + frame.up * slab_y_m;
+        for (side_index, x_m) in [-SLAB_BED_HALF_WIDTH_M, SLAB_BED_HALF_WIDTH_M]
+            .into_iter()
+            .enumerate()
+        {
+            let position = frame.origin + frame.right * x_m + frame.up * SLAB_BED_Y_M;
             let normal = frame.up;
-            let uv = glam::vec2(side_index as f32 * half_width_m * 2.0, s_m);
+            let uv = glam::vec2(side_index as f32 * SLAB_BED_HALF_WIDTH_M * 2.0, s_m);
 
             vertices.push(Vertex::new(position, normal, Some(uv)));
         }
