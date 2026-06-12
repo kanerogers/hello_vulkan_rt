@@ -1,6 +1,6 @@
 use crate::{demo_state::DemoState, track::TrackFrame};
 use anyhow::{Context, Result};
-use lazy_vulkan::StateFamily;
+use lazy_vulkan::{StateFamily, vk};
 use std::default::Default;
 
 pub struct RenderState<'a> {
@@ -8,6 +8,7 @@ pub struct RenderState<'a> {
     pub elapsed_seconds: f32,
     pub demo_state: &'a DemoState,
     pub train_current_frame: TrackFrame,
+    pub drawable_extent: vk::Extent2D,
 }
 
 pub struct RenderStateFamily;

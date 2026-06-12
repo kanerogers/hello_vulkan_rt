@@ -62,7 +62,17 @@ impl ApplicationHandler for App {
             WindowEvent::CloseRequested => {
                 event_loop.exit();
             }
+            WindowEvent::Resized(size) => {
+                if size.width > 0 && size.height > 0 {
+                    state.lazy_vulkan.resize(size);
+                }
+            }
             WindowEvent::RedrawRequested => {
+                let drawable_size = state.window.inner_size();
+                if drawable_size.width == 0 || drawable_size.height == 0 {
+                    return;
+                }
+
                 let now = Instant::now();
                 let frame_time_s = (now - state.last_frame_time)
                     .as_secs_f32()
@@ -83,6 +93,10 @@ impl ApplicationHandler for App {
                     elapsed_seconds: state.start_time.elapsed().as_secs_f32(),
                     demo_state: &state.demo_state,
                     train_current_frame: train_current_frame,
+                    drawable_extent: lazy_vulkan::vk::Extent2D {
+                        width: drawable_size.width,
+                        height: drawable_size.height,
+                    },
                 });
             }
             _ => {}

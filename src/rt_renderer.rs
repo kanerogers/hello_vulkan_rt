@@ -2,8 +2,8 @@ use std::{sync::Arc, time::SystemTime};
 
 use anyhow::{Context, Result};
 use lazy_vulkan::{
-    Allocator, BufferAllocation, FULL_IMAGE, LayerInfo, PipelineOptions, SlabUpload, SubRenderer,
-    ash,
+    Allocator, BufferAllocation, FULL_IMAGE, ImageManager, LayerInfo, PipelineOptions, SlabUpload,
+    SubRenderer, ash,
     vk::{self, Packed24_8},
 };
 use lazy_vulkan_gltf::{GPUMaterial, NO_TEXTURE, TextureID};
@@ -30,6 +30,8 @@ static SHADOW_MISS_SHADER_PATH: &'static str = "shaders/shadowmiss.rmiss.spv";
 static RAYGEN_SHADER_PATH: &'static str = "shaders/raygen.rgen.spv";
 static TONEMAPPING_SHADER_PATH: &'static str = "shaders/tonemapping.frag.spv";
 static FULLSCREEN_SHADER_PATH: &'static str = "shaders/fullscreen.vert.spv";
+
+const RT_TARGET_FORMAT: vk::Format = vk::Format::R16G16B16A16_SFLOAT;
 
 const RAYGEN_INDEX: u32 = 0;
 const MISS_INDEX: u32 = 1;
@@ -60,12 +62,10 @@ impl RTRenderer {
         let extent = renderer.get_drawable_extent();
         let image = renderer.create_image(
             "RT Target",
-            vk::Format::R16G16B16A16_SFLOAT,
+            RT_TARGET_FORMAT,
             extent,
             &[],
-            vk::ImageUsageFlags::STORAGE
-                | vk::ImageUsageFlags::TRANSFER_SRC
-                | vk::ImageUsageFlags::SAMPLED,
+            rt_target_usage(),
         );
 
         // Scene data
@@ -211,6 +211,52 @@ impl RTRenderer {
             log::warn!("failed to refresh RT shader mtimes: {error:#}");
         }
     }
+
+    fn resize_rt_target_if_needed(
+        &mut self,
+        extent: vk::Extent2D,
+        allocator: &mut Allocator,
+        image_manager: &mut ImageManager,
+    ) {
+        if extent.width == 0 || extent.height == 0 || self.image.extent == extent {
+            return;
+        }
+
+        log::info!("resizing RT target to {}x{}", extent.width, extent.height);
+
+        self.image = image_manager.create_image(
+            "RT Target",
+            allocator,
+            RT_TARGET_FORMAT,
+            extent,
+            &[],
+            rt_target_usage(),
+        );
+
+        self.update_rt_storage_image_descriptor();
+    }
+
+    fn update_rt_storage_image_descriptor(&self) {
+        let device = &self.context.device;
+
+        unsafe {
+            device.update_descriptor_sets(
+                &[vk::WriteDescriptorSet::default()
+                    .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
+                    .dst_set(self.descriptor_set)
+                    .dst_binding(1)
+                    .descriptor_count(1)
+                    .image_info(&[vk::DescriptorImageInfo::default()
+                        .image_layout(vk::ImageLayout::GENERAL)
+                        .image_view(self.image.view)])],
+                &[],
+            )
+        };
+    }
+}
+
+fn rt_target_usage() -> vk::ImageUsageFlags {
+    vk::ImageUsageFlags::STORAGE | vk::ImageUsageFlags::TRANSFER_SRC | vk::ImageUsageFlags::SAMPLED
 }
 
 impl<'a> SubRenderer<'a> for RTRenderer {
@@ -218,10 +264,12 @@ impl<'a> SubRenderer<'a> for RTRenderer {
 
     fn stage_transfers(
         &mut self,
-        _state: &Self::State,
+        state: &Self::State,
         allocator: &mut lazy_vulkan::Allocator,
-        _image_manager: &mut lazy_vulkan::ImageManager,
+        image_manager: &mut lazy_vulkan::ImageManager,
     ) {
+        self.resize_rt_target_if_needed(state.drawable_extent, allocator, image_manager);
+
         // No need to rebuild if we already have a state
         if self.state.is_some() {
             self.reload_rt_shaders_if_needed(allocator);
