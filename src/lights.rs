@@ -13,6 +13,10 @@ pub struct TunnelLight {
     pub intensity: f32,
     pub emission_direction: glam::Vec3,
     pub directional_falloff_power: f32,
+    pub shape_axis_u: glam::Vec3,
+    pub shape_half_extent_u_metres: f32,
+    pub shape_axis_v: glam::Vec3,
+    pub shape_half_extent_v_metres: f32,
 }
 
 unsafe impl bytemuck::Zeroable for TunnelLight {}
@@ -43,6 +47,10 @@ pub fn generate_tunnel_lights(
             intensity: led.intensity,
             emission_direction: -led_frame.up,
             directional_falloff_power: 1.5,
+            shape_axis_u: led_frame.forward,
+            shape_half_extent_u_metres: led.length_metres * 0.5,
+            shape_axis_v: led_frame.right,
+            shape_half_extent_v_metres: led.half_width_metres,
         });
 
         let strip = lower_strip_fixtures[bay_index];
@@ -63,6 +71,10 @@ pub fn generate_tunnel_lights(
                 intensity: strip.intensity,
                 emission_direction: -frame.right,
                 directional_falloff_power: 1.5,
+                shape_axis_u: frame.forward,
+                shape_half_extent_u_metres: (tile.end_s_metres - tile.start_s_metres) * 0.5,
+                shape_axis_v: frame.up,
+                shape_half_extent_v_metres: strip.half_height_metres,
             });
         }
     }

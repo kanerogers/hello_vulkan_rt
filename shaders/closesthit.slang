@@ -170,7 +170,9 @@ float3 sampleTunnelLight(uint lightIndex, float3 worldPosition,
 
   let light = registers.lightBuffer[lightIndex];
 
-  let toLight = light.position - worldPosition;
+  let lightSamplePosition = closestPointOnLightShape(light, worldPosition);
+  let toLight = lightSamplePosition - worldPosition;
+
   let distanceMetres = length(toLight);
   let lightDir = toLight / max(distanceMetres, 0.001);
 
@@ -261,6 +263,19 @@ float3 applyNormalMap(Material material, float2 uv, float3 worldNormal,
 
   return normalize(tangent * tangentNormal.x + bitangent * tangentNormal.y +
                    worldNormal * tangentNormal.z);
+}
+
+float3 closestPointOnLightShape(TunnelLight light, float3 worldPosition) {
+  let fromLightCenter = worldPosition - light.position;
+
+  let u = clamp(dot(fromLightCenter, normalize(light.shapeAxisU)),
+                -light.shapeHalfExtentUMetres, light.shapeHalfExtentUMetres);
+
+  let v = clamp(dot(fromLightCenter, normalize(light.shapeAxisV)),
+                -light.shapeHalfExtentVMetres, light.shapeHalfExtentVMetres);
+
+  return light.position + normalize(light.shapeAxisU) * u +
+         normalize(light.shapeAxisV) * v;
 }
 
 bool traceVisibilityRay(float3 origin, float3 direction, float rayTMin,

@@ -60,6 +60,10 @@ struct TunnelLight {
   float intensity;
   float3 emissionDirection;
   float directionalFalloffPower;
+  float3 shapeAxisU;
+  float shapeHalfExtentUMetres;
+  float3 shapeAxisV;
+  float shapeHalfExtentVMetres;
 }
 
 static const uint RAY_TYPE_RADIANCE = 0;
