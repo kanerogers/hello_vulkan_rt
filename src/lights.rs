@@ -1,6 +1,14 @@
 use crate::{mesh_generation, track::Track};
 
+pub const LED_TUBE_LIGHT_RADIUS_METRES: f32 = 6.0;
+pub const LED_TUBE_LIGHT_INTENSITY: f32 = 6.0;
+pub const LED_TUBE_DIRECTIONAL_FALLOFF_POWER: f32 = 4.0;
+
 pub const LOWER_STRIP_LIGHTS_PER_BAY: usize = 25;
+pub const LOWER_STRIP_LIGHT_RADIUS_METRES: f32 = 1.0;
+pub const LOWER_STRIP_LIGHT_INTENSITY: f32 = 1.0;
+pub const LOWER_STRIP_DIRECTIONAL_FALLOFF_POWER: f32 = 1.5;
+
 pub const TUNNEL_LIGHTS_PER_BAY: usize = 1 + LOWER_STRIP_LIGHTS_PER_BAY;
 
 // Lights
@@ -46,7 +54,7 @@ pub fn generate_tunnel_lights(
             colour: led.colour,
             intensity: led.intensity,
             emission_direction: -led_frame.up,
-            directional_falloff_power: 1.5,
+            directional_falloff_power: LED_TUBE_DIRECTIONAL_FALLOFF_POWER,
             shape_axis_u: led_frame.forward,
             shape_half_extent_u_metres: led.length_metres * 0.5,
             shape_axis_v: led_frame.right,
@@ -70,7 +78,7 @@ pub fn generate_tunnel_lights(
                 colour: strip.colour,
                 intensity: strip.intensity,
                 emission_direction: -frame.right,
-                directional_falloff_power: 1.5,
+                directional_falloff_power: LOWER_STRIP_DIRECTIONAL_FALLOFF_POWER,
                 shape_axis_u: frame.forward,
                 shape_half_extent_u_metres: (tile.end_s_metres - tile.start_s_metres) * 0.5,
                 shape_axis_v: frame.up,

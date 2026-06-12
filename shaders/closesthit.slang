@@ -116,16 +116,14 @@ void main(inout HitPayload payload,
   // let ao = aoVisible ? 1.0f : 0.55f;
 
   let diffuseAlbedo = albedo * (1.0 - metalness);
-  let ambientTerm = 0.001 * ambientOcclusion;
-
-  var directLight = float3(0.0);
-  let activeRangeMetres = 80.0;
+  let ambientTerm = 0.0005 * ambientOcclusion;
 
   let bayCount = max(registers.lightCount / TUNNEL_LIGHTS_PER_BAY, 1u);
 
   let previousBay = bayId == 0 ? bayCount - 1 : bayId - 1;
   let nextBay = bayId + 1 == bayCount ? 0 : bayId + 1;
 
+  var directLight = float3(0.0);
   directLight += sampleTunnelLight(previousBay * TUNNEL_LIGHTS_PER_BAY +
                                        LED_LIGHT_OFFSET_IN_BAY,
                                    worldPosition, worldNormal);

@@ -1,22 +1,25 @@
-use std::sync::Arc;
+use std::{sync::Arc, time::SystemTime};
 
-use anyhow::Context;
+use anyhow::{Context, Result};
 use lazy_vulkan::{
-    BufferAllocation, FULL_IMAGE, LayerInfo, PipelineOptions, SlabUpload, SubRenderer,
+    Allocator, BufferAllocation, FULL_IMAGE, LayerInfo, PipelineOptions, SlabUpload, SubRenderer,
+    ash,
     vk::{self, Packed24_8},
 };
 use lazy_vulkan_gltf::{GPUMaterial, NO_TEXTURE, TextureID};
 
 use crate::{
     demo_state::{DemoState, TRACK_LENGTH_METRES},
-    graphics::{RenderState, RenderStateFamily},
-    lights::{TUNNEL_LIGHTS_PER_BAY, TunnelLight, generate_tunnel_lights},
+    graphics::{RT_SHADER_WATCH_PATHS, RenderState, RenderStateFamily, compile_rt_shaders},
+    lights::{
+        LED_TUBE_LIGHT_INTENSITY, LOWER_STRIP_LIGHT_INTENSITY, TUNNEL_LIGHTS_PER_BAY, TunnelLight,
+        generate_tunnel_lights,
+    },
     material_loader,
     mesh_generation::{
-        self, LED_TUBE_LIGHT_INTENSITY, LOWER_STRIP_LIGHT_INTENSITY, TUNNEL_BAY_LENGTH_METRES,
-        generate_cable_tray, generate_led_tube_fixtures, generate_led_tubes,
-        generate_lower_strip_fixtures, generate_lower_strip_lights, generate_rails,
-        generate_service_walkway, generate_slab_bed, generate_tunnel_shell,
+        self, TUNNEL_BAY_LENGTH_METRES, generate_cable_tray, generate_led_tube_fixtures,
+        generate_led_tubes, generate_lower_strip_fixtures, generate_lower_strip_lights,
+        generate_rails, generate_service_walkway, generate_slab_bed, generate_tunnel_shell,
     },
     track::{Track, TrackFrame},
 };
@@ -48,6 +51,7 @@ pub struct RTRenderer {
     descriptor_pool: vk::DescriptorPool,
     descriptor_set: vk::DescriptorSet,
     scene_data: SceneData,
+    rt_shader_hot_reload: RtShaderHotReload,
 }
 
 impl RTRenderer {
@@ -142,7 +146,7 @@ impl RTRenderer {
 
         let context = &renderer.context;
 
-        let pipeline = create_rt_pipeline(pipeline_layout, context);
+        let pipeline = create_rt_pipeline(pipeline_layout, context).unwrap();
 
         let tonemapping_pipeline = renderer.create_pipeline_with_options::<TonemappingRegisters>(
             &r(FULLSCREEN_SHADER_PATH),
@@ -164,6 +168,47 @@ impl RTRenderer {
             tonemapping_pipeline,
             renderer_descriptor_set: renderer.descriptors.set,
             scene_data,
+            rt_shader_hot_reload: RtShaderHotReload::new().unwrap(),
+        }
+    }
+
+    fn reload_rt_shaders_if_needed(&mut self, allocator: &mut Allocator) {
+        let changed_paths = match self.rt_shader_hot_reload.changed_paths() {
+            Ok(changed_paths) => changed_paths,
+            Err(error) => {
+                log::warn!("failed to stat RT shader sources: {error:#}");
+                return;
+            }
+        };
+
+        if changed_paths.is_empty() {
+            return;
+        }
+
+        log::info!("RT shader source changed: {}", changed_paths.join(", "));
+
+        let reload_result = compile_rt_shaders().and_then(|_| {
+            let pipeline = create_rt_pipeline(self.pipeline_layout, &self.context)?;
+            let sbt = SBT::new(&self.context, allocator, pipeline);
+            allocator.execute_transfers(self.context.draw_command_buffer);
+            Ok((pipeline, sbt))
+        });
+
+        match reload_result {
+            Ok((pipeline, sbt)) => {
+                if let Some(rt_state) = &mut self.state {
+                    self.pipeline = pipeline;
+                    rt_state.sbt = sbt;
+                    log::info!("RT shaders reloaded");
+                }
+            }
+            Err(error) => {
+                log::error!("RT shader reload failed; keeping previous pipeline: {error:#}");
+            }
+        }
+
+        if let Err(error) = self.rt_shader_hot_reload.refresh() {
+            log::warn!("failed to refresh RT shader mtimes: {error:#}");
         }
     }
 }
@@ -179,6 +224,7 @@ impl<'a> SubRenderer<'a> for RTRenderer {
     ) {
         // No need to rebuild if we already have a state
         if self.state.is_some() {
+            self.reload_rt_shaders_if_needed(allocator);
             return;
         }
 
@@ -1195,13 +1241,76 @@ fn camera_view_from_train_frame(train_frame: TrackFrame, demo_state: &DemoState)
     world_from_camera
 }
 
+// Shader reload helpers
+
+struct RtShaderHotReload {
+    watched_files: Vec<WatchedShaderFile>,
+}
+
+struct WatchedShaderFile {
+    path: &'static str,
+    modified: SystemTime,
+}
+
+impl RtShaderHotReload {
+    fn new() -> Result<Self> {
+        let mut hot_reload = Self {
+            watched_files: Vec::with_capacity(RT_SHADER_WATCH_PATHS.len()),
+        };
+        hot_reload.refresh()?;
+        Ok(hot_reload)
+    }
+
+    fn changed_paths(&self) -> Result<Vec<&'static str>> {
+        self.watched_files
+            .iter()
+            .filter_map(|watched_file| {
+                let modified = shader_modified_time(watched_file.path);
+                match modified {
+                    Ok(modified) if modified != watched_file.modified => {
+                        Some(Ok(watched_file.path))
+                    }
+                    Ok(_) => None,
+                    Err(error) => Some(Err(error)),
+                }
+            })
+            .collect()
+    }
+
+    fn refresh(&mut self) -> Result<()> {
+        self.watched_files = RT_SHADER_WATCH_PATHS
+            .iter()
+            .map(|&path| {
+                Ok(WatchedShaderFile {
+                    path,
+                    modified: shader_modified_time(path)?,
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        Ok(())
+    }
+}
+
+fn shader_modified_time(path: &str) -> Result<SystemTime> {
+    std::fs::metadata(path)
+        .with_context(|| format!("failed to read metadata for {path}"))?
+        .modified()
+        .with_context(|| format!("failed to read modified time for {path}"))
+}
+
 // Pipeline helpers
 
 fn create_rt_pipeline(
     pipeline_layout: vk::PipelineLayout,
     context: &Arc<lazy_vulkan::Context>,
-) -> vk::Pipeline {
-    let pipeline = unsafe {
+) -> Result<vk::Pipeline> {
+    let raygen_module = load_shader_module(RAYGEN_SHADER_PATH, context)?;
+    let miss_module = load_shader_module(MISS_SHADER_PATH, context)?;
+    let shadow_miss_module = load_shader_module(SHADOW_MISS_SHADER_PATH, context)?;
+    let closest_hit_module = load_shader_module(CLOSEST_HIT_SHADER_PATH, context)?;
+
+    let pipeline_result = unsafe {
         context
             .ray_tracing_pipeline_pfn
             .create_ray_tracing_pipelines(
@@ -1238,33 +1347,53 @@ fn create_rt_pipeline(
                         vk::PipelineShaderStageCreateInfo::default()
                             .stage(vk::ShaderStageFlags::RAYGEN_KHR)
                             .name(c"main")
-                            .module(lazy_vulkan::load_module(&r(RAYGEN_SHADER_PATH), context)),
+                            .module(raygen_module),
                         vk::PipelineShaderStageCreateInfo::default()
                             .stage(vk::ShaderStageFlags::MISS_KHR)
                             .name(c"main")
-                            .module(lazy_vulkan::load_module(&r(MISS_SHADER_PATH), context)),
+                            .module(miss_module),
                         vk::PipelineShaderStageCreateInfo::default()
                             .stage(vk::ShaderStageFlags::MISS_KHR)
                             .name(c"main")
-                            .module(lazy_vulkan::load_module(
-                                &r(SHADOW_MISS_SHADER_PATH),
-                                context,
-                            )),
+                            .module(shadow_miss_module),
                         vk::PipelineShaderStageCreateInfo::default()
                             .stage(vk::ShaderStageFlags::CLOSEST_HIT_KHR)
                             .name(c"main")
-                            .module(lazy_vulkan::load_module(
-                                &r(CLOSEST_HIT_SHADER_PATH),
-                                context,
-                            )),
+                            .module(closest_hit_module),
                     ])
                     .max_pipeline_ray_recursion_depth(2)
                     .layout(pipeline_layout)],
                 None,
             )
+    };
+
+    unsafe {
+        context.device.destroy_shader_module(raygen_module, None);
+        context.device.destroy_shader_module(miss_module, None);
+        context
+            .device
+            .destroy_shader_module(shadow_miss_module, None);
+        context
+            .device
+            .destroy_shader_module(closest_hit_module, None);
     }
-    .unwrap()[0];
-    pipeline
+
+    Ok(pipeline_result
+        .map_err(|(_, error)| anyhow::anyhow!("failed to create RT pipeline: {error:?}"))?[0])
+}
+
+fn load_shader_module(path: &str, context: &lazy_vulkan::Context) -> Result<vk::ShaderModule> {
+    let bytes = std::fs::read(path).with_context(|| format!("failed to read {path}"))?;
+    let mut cursor = std::io::Cursor::new(bytes);
+    let words = ash::util::read_spv(&mut cursor)
+        .with_context(|| format!("failed to parse SPIR-V from {path}"))?;
+
+    unsafe {
+        context
+            .device
+            .create_shader_module(&vk::ShaderModuleCreateInfo::default().code(&words), None)
+    }
+    .map_err(|error| anyhow::anyhow!("failed to create shader module from {path}: {error:?}"))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

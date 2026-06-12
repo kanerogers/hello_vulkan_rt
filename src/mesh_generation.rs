@@ -1,4 +1,10 @@
-use crate::track::Track;
+use crate::{
+    lights::{
+        LED_TUBE_LIGHT_INTENSITY, LED_TUBE_LIGHT_RADIUS_METRES, LOWER_STRIP_LIGHT_INTENSITY,
+        LOWER_STRIP_LIGHT_RADIUS_METRES,
+    },
+    track::Track,
+};
 use lazy_vulkan_gltf::Vertex;
 
 pub const TUNNEL_BAY_LENGTH_METRES: f32 = 10.0;
@@ -17,8 +23,6 @@ pub const LED_TUBE_X_METRES: f32 = 0.0;
 pub const LED_TUBE_Y_METRES: f32 = 4.02;
 pub const LED_TUBE_HALF_WIDTH_METRES: f32 = 0.09;
 pub const LED_TUBE_HALF_HEIGHT_METRES: f32 = 0.035;
-pub const LED_TUBE_LIGHT_RADIUS_METRES: f32 = 6.7;
-pub const LED_TUBE_LIGHT_INTENSITY: f32 = 5.0;
 
 pub const LOWER_STRIP_LENGTH_METRES: f32 = TUNNEL_BAY_LENGTH_METRES;
 pub const LOWER_STRIP_HALF_WIDTH_METRES: f32 = 0.015;
@@ -29,8 +33,6 @@ pub const LOWER_STRIP_Y_METRES: f32 =
     (SERVICE_WALKWAY_TOP_Y_METRES + SERVICE_WALKWAY_BOTTOM_Y_METRES) * 0.5;
 pub const LOWER_STRIP_TILE_PITCH_METRES: f32 = 0.40;
 pub const LOWER_STRIP_TILE_GAP_METRES: f32 = 0.26;
-pub const LOWER_STRIP_LIGHT_RADIUS_METRES: f32 = 1.0;
-pub const LOWER_STRIP_LIGHT_INTENSITY: f32 = 1.0;
 
 pub struct GeneratedMesh {
     pub vertices: Vec<Vertex>,

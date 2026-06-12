@@ -1,4 +1,5 @@
 use crate::{demo_state::DemoState, track::TrackFrame};
+use anyhow::{Context, Result};
 use lazy_vulkan::StateFamily;
 use std::default::Default;
 
@@ -15,19 +16,65 @@ impl StateFamily for RenderStateFamily {
     type For<'a> = RenderState<'a>;
 }
 
+#[derive(Clone, Copy)]
+struct ShaderCompileJob {
+    input_path: &'static str,
+    output_path: &'static str,
+}
+
+const RT_SHADER_COMPILE_JOBS: &[ShaderCompileJob] = &[
+    ShaderCompileJob {
+        input_path: "shaders/raygen.slang",
+        output_path: "shaders/raygen.rgen.spv",
+    },
+    ShaderCompileJob {
+        input_path: "shaders/miss.slang",
+        output_path: "shaders/miss.rmiss.spv",
+    },
+    ShaderCompileJob {
+        input_path: "shaders/shadowmiss.slang",
+        output_path: "shaders/shadowmiss.rmiss.spv",
+    },
+    ShaderCompileJob {
+        input_path: "shaders/closesthit.slang",
+        output_path: "shaders/closesthit.rchit.spv",
+    },
+];
+
+const GRAPHICS_SHADER_COMPILE_JOBS: &[ShaderCompileJob] = &[
+    ShaderCompileJob {
+        input_path: "shaders/fullscreen.slang",
+        output_path: "shaders/fullscreen.vert.spv",
+    },
+    ShaderCompileJob {
+        input_path: "shaders/tonemapping.slang",
+        output_path: "shaders/tonemapping.frag.spv",
+    },
+];
+
+pub const RT_SHADER_WATCH_PATHS: &[&str] = &[
+    "shaders/raygen.slang",
+    "shaders/miss.slang",
+    "shaders/shadowmiss.slang",
+    "shaders/closesthit.slang",
+    "shaders/common.slang",
+    "shaders/sampling.slang",
+];
+
 pub fn compile_shaders() {
+    compile_shader_jobs(RT_SHADER_COMPILE_JOBS)
+        .and_then(|_| compile_shader_jobs(GRAPHICS_SHADER_COMPILE_JOBS))
+        .unwrap();
+}
+
+pub fn compile_rt_shaders() -> Result<()> {
+    compile_shader_jobs(RT_SHADER_COMPILE_JOBS)
+}
+
+fn compile_shader_jobs(shader_jobs: &[ShaderCompileJob]) -> Result<()> {
     use shader_slang as slang;
 
-    const SHADERS: &[(&str, &str)] = &[
-        ("shaders/raygen.slang", "shaders/raygen.rgen.spv"),
-        ("shaders/miss.slang", "shaders/miss.rmiss.spv"),
-        ("shaders/shadowmiss.slang", "shaders/shadowmiss.rmiss.spv"),
-        ("shaders/closesthit.slang", "shaders/closesthit.rchit.spv"),
-        ("shaders/fullscreen.slang", "shaders/fullscreen.vert.spv"),
-        ("shaders/tonemapping.slang", "shaders/tonemapping.frag.spv"),
-    ];
-
-    let global_session = slang::GlobalSession::new().unwrap();
+    let global_session = slang::GlobalSession::new().context("failed to create Slang session")?;
     let search_path = std::ffi::CString::new("shaders/").unwrap();
 
     let session_options = slang::CompilerOptions::default()
@@ -48,19 +95,36 @@ pub fn compile_shaders() {
         .search_paths(&search_paths)
         .options(&session_options);
 
-    let session = global_session.create_session(&session_desc).unwrap();
+    let session = global_session
+        .create_session(&session_desc)
+        .context("failed to create Slang compile session")?;
 
-    for (input_path, output_path) in SHADERS {
-        log::debug!("[SHADERS] Compiling {input_path} to {output_path}");
+    for shader_job in shader_jobs {
+        log::debug!(
+            "[SHADERS] Compiling {} to {}",
+            shader_job.input_path,
+            shader_job.output_path
+        );
 
-        let module = session.load_module(input_path).unwrap();
-        let entry_point = module.find_entry_point_by_name("main").unwrap();
+        let module = session
+            .load_module(shader_job.input_path)
+            .with_context(|| format!("failed to load {}", shader_job.input_path))?;
+        let entry_point = module
+            .find_entry_point_by_name("main")
+            .with_context(|| format!("failed to find main in {}", shader_job.input_path))?;
         let program = session
             .create_composite_component_type(&[module.clone().into(), entry_point.into()])
-            .unwrap();
-        let linked_program = program.link().unwrap();
-        let shader_bytecode = linked_program.entry_point_code(0, 0).unwrap();
+            .with_context(|| format!("failed to compose {}", shader_job.input_path))?;
+        let linked_program = program
+            .link()
+            .with_context(|| format!("failed to link {}", shader_job.input_path))?;
+        let shader_bytecode = linked_program
+            .entry_point_code(0, 0)
+            .with_context(|| format!("failed to generate SPIR-V for {}", shader_job.input_path))?;
 
-        std::fs::write(output_path, shader_bytecode.as_slice()).unwrap();
+        std::fs::write(shader_job.output_path, shader_bytecode.as_slice())
+            .with_context(|| format!("failed to write {}", shader_job.output_path))?;
     }
+
+    Ok(())
 }
