@@ -10,6 +10,7 @@ use lazy_vulkan_gltf::{GPUMaterial, NO_TEXTURE, TextureID};
 use crate::{
     demo_state::{DemoState, TRACK_LENGTH_METRES},
     graphics::{RenderState, RenderStateFamily},
+    lights::{TUNNEL_LIGHTS_PER_BAY, TunnelLight, generate_tunnel_lights},
     material_loader,
     mesh_generation::{
         self, LED_TUBE_LIGHT_INTENSITY, LOWER_STRIP_LIGHT_INTENSITY, TUNNEL_BAY_LENGTH_METRES,
@@ -31,9 +32,6 @@ const RAYGEN_INDEX: u32 = 0;
 const MISS_INDEX: u32 = 1;
 const SHADOW_MISS_INDEX: u32 = 2;
 const CLOSEST_HIT_INDEX: u32 = 3;
-
-const LOWER_STRIP_LIGHTS_PER_BAY: usize = 25;
-const TUNNEL_LIGHTS_PER_BAY: usize = 1 + LOWER_STRIP_LIGHTS_PER_BAY;
 
 const BAY_COUNT: usize = (TRACK_LENGTH_METRES / TUNNEL_BAY_LENGTH_METRES).round() as usize;
 
@@ -424,8 +422,6 @@ impl SceneData {
         let rail_material = material_loader::load_material(renderer, "rail_steel");
         let speckled_plastic_material =
             material_loader::load_material(renderer, "speckled_plastic");
-        let galvanized_metal_material =
-            material_loader::load_material(renderer, "galvanized_metal");
 
         for bay_index in 0..BAY_COUNT {
             let bay_start_s_metres = bay_index as f32 * TUNNEL_BAY_LENGTH_METRES;
@@ -1269,71 +1265,6 @@ fn create_rt_pipeline(
     }
     .unwrap()[0];
     pipeline
-}
-
-// Lights
-#[repr(C)]
-#[derive(Copy, Clone, Debug)]
-struct TunnelLight {
-    position: glam::Vec3,
-    radius_metres: f32,
-    colour: glam::Vec3,
-    intensity: f32,
-    start_s_metres: f32,
-}
-
-unsafe impl bytemuck::Zeroable for TunnelLight {}
-unsafe impl bytemuck::Pod for TunnelLight {}
-
-fn generate_tunnel_lights(
-    track: &Track,
-    bay_count: usize,
-    led_fixtures: &[mesh_generation::LedTubeFixture],
-    lower_strip_fixtures: &[mesh_generation::LowerStripFixture],
-) -> Vec<TunnelLight> {
-    let mut lights = Vec::with_capacity(bay_count * TUNNEL_LIGHTS_PER_BAY);
-
-    debug_assert_eq!(led_fixtures.len(), bay_count);
-    debug_assert_eq!(lower_strip_fixtures.len(), bay_count);
-
-    for bay_index in 0..bay_count {
-        let led = led_fixtures[bay_index];
-        let led_center_s_metres = led.start_s_metres + led.length_metres * 0.5;
-        let led_frame = track.sample(led_center_s_metres);
-
-        lights.push(TunnelLight {
-            position: led_frame.origin
-                + led_frame.right * led.x_metres
-                + led_frame.up * led.y_metres,
-            radius_metres: led.radius_metres,
-            colour: led.colour,
-            intensity: led.intensity,
-            start_s_metres: led.start_s_metres,
-        });
-
-        let strip = lower_strip_fixtures[bay_index];
-        let strip_tiles = mesh_generation::lower_strip_tiles(&strip);
-        debug_assert_eq!(strip_tiles.len(), LOWER_STRIP_LIGHTS_PER_BAY);
-
-        for tile in strip_tiles {
-            let center_s_metres = (tile.start_s_metres + tile.end_s_metres) * 0.5;
-            let frame = track.sample(center_s_metres);
-            let inward_face_x_metres = strip.x_metres - strip.half_width_metres;
-
-            lights.push(TunnelLight {
-                position: frame.origin
-                    + frame.right * inward_face_x_metres
-                    + frame.up * strip.y_metres,
-                radius_metres: strip.radius_metres,
-                colour: strip.colour,
-                intensity: strip.intensity,
-                start_s_metres: tile.start_s_metres,
-            });
-        }
-    }
-
-    debug_assert_eq!(lights.len(), bay_count * TUNNEL_LIGHTS_PER_BAY);
-    lights
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

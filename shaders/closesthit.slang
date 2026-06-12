@@ -175,8 +175,17 @@ float3 sampleTunnelLight(uint lightIndex, float3 worldPosition,
   let lightDir = toLight / max(distanceMetres, 0.001);
 
   let ndotl = saturate(dot(worldNormal, lightDir));
-  let radiusFade = saturate(1.0 - distanceMetres / light.radiusMetres);
-  let attenuation = radiusFade * radiusFade;
+
+  let distance01 = saturate(distanceMetres / light.radiusMetres);
+  let radiusFade = saturate(1.0 - distance01 * distance01);
+  let distanceAttenuation = radiusFade * radiusFade;
+
+  let fromLightToSurface = -lightDir;
+  let emissionCos =
+      saturate(dot(normalize(light.emissionDirection), fromLightToSurface));
+  let directionalAttenuation = pow(emissionCos, light.directionalFalloffPower);
+
+  let attenuation = distanceAttenuation * directionalAttenuation;
 
   if (ndotl <= 0.0 || attenuation <= 0.0) {
     return float3(0.0);
