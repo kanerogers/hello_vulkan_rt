@@ -513,7 +513,7 @@ impl SceneData {
         let concrete_shell_material = material_loader::load_material(renderer, "concrete_shell");
         let concrete_floor_material = material_loader::load_material(renderer, "concrete_floor");
         let studded_metal_material = material_loader::load_material(renderer, "studded_metal");
-        let rail_material = material_loader::load_material(renderer, "rail_steel");
+        let rail_material = material_loader::load_material(renderer, "galvanized_metal");
         let speckled_plastic_material =
             material_loader::load_material(renderer, "speckled_plastic");
 
