@@ -264,6 +264,11 @@ float3 applyNormalMap(Material material, float2 uv, float3 worldNormal,
 }
 
 float3 closestPointOnLightShape(TunnelLight light, float3 worldPosition) {
+  // Don't bother with small lights.
+  if (light.radiusMetres <= 1.0) {
+    return light.position;
+  }
+
   let fromLightCenter = worldPosition - light.position;
 
   let u = clamp(dot(fromLightCenter, normalize(light.shapeAxisU)),
