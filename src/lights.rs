@@ -1,12 +1,12 @@
 use crate::{mesh_generation, track::Track};
 
 pub const LED_TUBE_LIGHT_RADIUS_METRES: f32 = 6.0;
-pub const LED_TUBE_LIGHT_INTENSITY: f32 = 6.0;
+pub const LED_TUBE_LIGHT_INTENSITY: f32 = 30.0;
 pub const LED_TUBE_DIRECTIONAL_FALLOFF_POWER: f32 = 4.0;
 
 pub const LOWER_STRIP_LIGHTS_PER_BAY: usize = 25;
 pub const LOWER_STRIP_LIGHT_RADIUS_METRES: f32 = 1.0;
-pub const LOWER_STRIP_LIGHT_INTENSITY: f32 = 1.0;
+pub const LOWER_STRIP_LIGHT_INTENSITY: f32 = 4.0;
 pub const LOWER_STRIP_DIRECTIONAL_FALLOFF_POWER: f32 = 1.5;
 
 pub const TUNNEL_LIGHTS_PER_BAY: usize = 1 + LOWER_STRIP_LIGHTS_PER_BAY;

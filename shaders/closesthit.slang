@@ -20,7 +20,7 @@ void main(inout HitPayload payload,
     return;
   }
 
-  Fragment fragment = Fragment(attributes);
+  Fragment fragment = Fragment(attributes, payload);
 
   let bayCount = max(registers.lightCount / TUNNEL_LIGHTS_PER_BAY, 1u);
   let previousBay = fragment.bayId == 0 ? bayCount - 1 : fragment.bayId - 1;
@@ -38,10 +38,8 @@ void main(inout HitPayload payload,
     }
   }
 
-  let diffuseAlbedo = fragment.albedo * (1.0 - fragment.metalness);
   let ambientTerm = 0.0005 * fragment.ambientOcclusion;
-
-  float3 finalColour = diffuseAlbedo * (ambientTerm + directLight);
+  float3 finalColour = fragment.diffuseAlbedo() * ambientTerm + directLight;
 
   payload.hitValue = finalColour;
   payload.weight = float3(0.0);
@@ -55,16 +53,16 @@ void main(inout HitPayload payload,
 }
 
 float3 sampleLED(Fragment fragment, uint bayID) {
-  return sampleTunnelLight(bayID * TUNNEL_LIGHTS_PER_BAY +
-                               LED_LIGHT_OFFSET_IN_BAY,
-                           fragment.worldPosition, fragment.worldNormal);
+  let light = sampleTunnelLight(
+      bayID * TUNNEL_LIGHTS_PER_BAY + LED_LIGHT_OFFSET_IN_BAY, fragment);
+  return evaluateDirectLighting(fragment, light);
 }
 
 float3 sampleStripLight(Fragment fragment, uint stripLightIndex) {
   let stripBase =
       fragment.bayId * TUNNEL_LIGHTS_PER_BAY + LOWER_STRIP_LIGHT_OFFSET_IN_BAY;
-  return sampleTunnelLight(stripBase + stripLightIndex, fragment.worldPosition,
-                           fragment.worldNormal);
+  let light = sampleTunnelLight(stripBase + stripLightIndex, fragment);
+  return evaluateDirectLighting(fragment, light);
 }
 
 float3 sampleTunnelLight(uint lightIndex, float3 worldPosition,
@@ -212,16 +210,72 @@ bool traceVisibilityRay(float3 origin, float3 direction, float rayTMin,
   return !payload.hit;
 }
 
+struct DirectLightSample {
+  float3 directionToLight;
+  float3 radiance;
+  float distanceMetres;
+  bool valid;
+};
+
+DirectLightSample sampleTunnelLight(uint lightIndex, Fragment fragment) {
+  DirectLightSample result;
+  result.valid = false;
+  result.directionToLight = float3(0.0);
+  result.radiance = float3(0.0);
+  result.distanceMetres = 0.0;
+
+  if (lightIndex >= registers.lightCount)
+    return result;
+
+  let light = registers.lightBuffer[lightIndex];
+  let lightSamplePosition =
+      closestPointOnLightShape(light, fragment.worldPosition);
+  let toLight = lightSamplePosition - fragment.worldPosition;
+
+  let distanceMetres = length(toLight);
+  let lightDir = toLight / max(distanceMetres, 0.001);
+
+  let ndotl = saturate(dot(fragment.worldNormal, lightDir));
+
+  let distance01 = saturate(distanceMetres / light.radiusMetres);
+  let radiusFade = saturate(1.0 - distance01 * distance01);
+  let distanceAttenuation = radiusFade * radiusFade;
+
+  let fromLightToSurface = -lightDir;
+  let emissionCos =
+      saturate(dot(normalize(light.emissionDirection), fromLightToSurface));
+  let directionalAttenuation = pow(emissionCos, light.directionalFalloffPower);
+
+  let attenuation = distanceAttenuation * directionalAttenuation;
+
+  if (ndotl <= 0.0 || attenuation <= 0.0)
+    return result;
+
+  if (!traceVisibilityRay(fragment.worldPosition + fragment.worldNormal * 0.01,
+                          lightDir, 0.001, max(distanceMetres - 1.0, 0.001))) {
+    return result;
+  }
+
+  result.valid = true;
+  result.directionToLight = lightDir;
+  result.radiance = light.colour * light.intensity * attenuation;
+  result.distanceMetres = distanceMetres;
+  return result;
+}
+
 struct Fragment {
   float3 worldPosition;
   float3 worldNormal;
   float3 albedo;
+  float3 viewDirection;
   float metalness;
   float roughness;
   float ambientOcclusion;
   uint bayId;
 
-  __init(BuiltInTriangleIntersectionAttributes attributes) {
+  __init(BuiltInTriangleIntersectionAttributes attributes, HitPayload payload) {
+    viewDirection = -payload.rayDirection;
+
     // Fetch the primitive, based on bayId and geometryKind
     let geometryKind = GeometryIndex();
 
@@ -317,4 +371,59 @@ struct Fragment {
       metalness = saturate(orm.b);
     }
   }
+
+  float3 diffuseAlbedo() { return albedo * (1.0 - metalness); }
+  float3 f0() { return lerp(float3(0.04), albedo, metalness); }
+  float directRoughness() { return clamp(roughness, 0.045, 1.0); }
 };
+
+float pow5(float x) {
+  let x2 = x * x;
+  return x2 * x2 * x;
+}
+
+float distributionGGX(float nDotH, float roughness) {
+  let alpha = roughness * roughness;
+  let alpha2 = alpha * alpha;
+  let denom = nDotH * nDotH * (alpha2 - 1.0) + 1.0;
+  return alpha2 / max(M_PI * denom * denom, 0.000001);
+}
+
+float geometrySchlickGGX(float nDotX, float roughness) {
+  let r = roughness + 1.0;
+  let k = (r * r) * 0.125;
+  return nDotX / max(nDotX * (1.0 - k) + k, 0.000001);
+}
+
+float3 fresnelSchlick(float vDotH, float3 f0) {
+  return f0 + (1.0 - f0) * pow5(1.0 - saturate(vDotH));
+}
+
+float3 evaluateDirectLighting(Fragment fragment, DirectLightSample light) {
+  if (!light.valid)
+    return float3(0.0);
+
+  let n = fragment.worldNormal;
+  let v = normalize(fragment.viewDirection);
+  let l = normalize(light.directionToLight);
+  let h = normalize(v + l);
+
+  let nDotL = saturate(dot(n, l));
+  let nDotV = saturate(dot(n, v));
+  let nDotH = saturate(dot(n, h));
+  let vDotH = saturate(dot(v, h));
+
+  if (nDotL <= 0.0 || nDotV <= 0.0)
+    return float3(0.0);
+
+  let roughness = fragment.directRoughness();
+  let f = fresnelSchlick(vDotH, fragment.f0());
+  let d = distributionGGX(nDotH, roughness);
+  let g = geometrySchlickGGX(nDotL, roughness) *
+          geometrySchlickGGX(nDotV, roughness);
+
+  let specular = (d * g * f) / max(4.0 * nDotL * nDotV, 0.000001);
+  let diffuse = fragment.diffuseAlbedo() / M_PI;
+
+  return light.radiance * nDotL * (diffuse + specular);
+}
