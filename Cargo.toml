@@ -11,4 +11,12 @@ glam = {version = "0.30.5", features = ["bytemuck"]}
 lazy_vulkan = {path="../lazy_vulkan", features=["rtx_on"]}
 lazy_vulkan_gltf = { version = "0.1.0", path = "../lazy_vulkan_gltf" }
 log = "0.4.28"
+png = "0.17.16"
+shader-slang = { git = "https://github.com/FloatyMonkey/slang-rs", version = "0.1.0" }
 winit = "0.30.12"
+
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 3

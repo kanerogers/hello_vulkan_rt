@@ -1,1 +1,6 @@
 /target
+*.spv
+
+// Nsight bullshit
+imgui.ini
+
