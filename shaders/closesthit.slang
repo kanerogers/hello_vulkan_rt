@@ -4,160 +4,67 @@ import sampling;
 [shader("closesthit")]
 void main(inout HitPayload payload,
           BuiltInTriangleIntersectionAttributes attributes) {
-  // Fetch the primitive, based on bayId and geometryKind
-  let bayId = InstanceID();
   let geometryKind = GeometryIndex();
-  let primitiveIndex = bayId * BAY_GEOMETRY_KIND_COUNT + geometryKind;
-
-  Primitive primitive = registers.primitiveBuffer[primitiveIndex];
-  Material material = *primitive.material;
-
-  let emissive = material.emissiveColourFactor;
 
   // If this is emissive, ie. a light, nothing more to do
   if (isEmissiveGeometry(geometryKind)) {
-    payload.hitValue = emissive;
+    let bayId = InstanceID();
+    let primitiveIndex = bayId * BAY_GEOMETRY_KIND_COUNT + geometryKind;
+
+    Primitive primitive = registers.primitiveBuffer[primitiveIndex];
+    Material material = *primitive.material;
+
+    payload.hitValue = material.emissiveColourFactor;
     payload.weight = float3(0.0);
     payload.depth = 100;
     return;
   }
 
-  uint indexOffset = 3 * PrimitiveIndex();
-
-  uint3 triangleIndex = uint3(primitive.indexBuffer[indexOffset],
-                              primitive.indexBuffer[indexOffset + 1],
-                              primitive.indexBuffer[indexOffset + 2]);
-
-  float2 attribs = attributes.barycentrics;
-  float3 barycentrics =
-      float3(1.0 - attribs.x - attribs.y, attribs.x, attribs.y);
-
-  // Extract the vertices
-  Vertex v0 = primitive.vertexBuffer[triangleIndex.x];
-  Vertex v1 = primitive.vertexBuffer[triangleIndex.y];
-  Vertex v2 = primitive.vertexBuffer[triangleIndex.z];
-
-  // Get the UV
-  var uv =
-      v0.uv * barycentrics.x + v1.uv * barycentrics.y + v2.uv * barycentrics.z;
-
-  if (geometryKind == GEOMETRY_KIND_TUNNEL_SHELL) {
-    uv *= 0.1;
-  }
-
-  if (geometryKind == GEOMETRY_KIND_SERVICE_WALKWAY) {
-    uv *= 0.4;
-  }
-
-  if (geometryKind == GEOMETRY_KIND_SLAB_BED) {
-    uv *= 0.1;
-  }
-
-  if (geometryKind == GEOMETRY_KIND_RAILS) {
-    uv *= 0.1;
-  }
-
-  // Position
-  let position = v0.position * barycentrics.x + v1.position * barycentrics.y +
-                 v2.position * barycentrics.z;
-
-  float3x4 objectToWorld = ObjectToWorld3x4();
-  float3 worldPosition = mul(objectToWorld, float4(position, 1.0));
-
-  let worldP0 = mul(objectToWorld, float4(v0.position, 1.0)).xyz;
-  let worldP1 = mul(objectToWorld, float4(v1.position, 1.0)).xyz;
-  let worldP2 = mul(objectToWorld, float4(v2.position, 1.0)).xyz;
-
-  float3 normal = v0.normal * barycentrics.x + v1.normal * barycentrics.y +
-                  v2.normal * barycentrics.z;
-
-  float3x4 worldToObject = WorldToObject3x4();
-  float4 transformedNormal = mul(normal, worldToObject);
-  float3 worldNormal = normalize(transformedNormal.xyz);
-
-  worldNormal = applyNormalMap(material, uv, worldNormal, worldP0, worldP1,
-                               worldP2, v0.uv, v1.uv, v2.uv);
-
-  var baseAlbedo = material.baseColourFactor.rgb;
-
-  if (material.baseColourTextureID != NO_TEXTURE) {
-    let sampledBaseColour =
-        textures[NonUniformResourceIndex(material.baseColourTextureID)]
-            .SampleLevelZero(uv, 0)
-            .rgb;
-
-    baseAlbedo *= sampledBaseColour;
-  }
-
-  var albedo = saturate(baseAlbedo);
-
-  var ambientOcclusion = 1.0;
-  var roughness = 0.85;
-  var metalness = 0.0;
-
-  if (material.metallicRoughnessTextureID != NO_TEXTURE) {
-    let orm =
-        textures[NonUniformResourceIndex(material.metallicRoughnessTextureID)]
-            .SampleLevelZero(uv, 0)
-            .rgb;
-
-    ambientOcclusion = orm.r;
-    roughness = saturate(orm.g);
-    metalness = saturate(orm.b);
-  }
-
-  // let aoDistanceMetres = 2.0f;
-  // let aoRayOrigin = worldPosition + worldNormal * 0.01f;
-  // let aoRayDirection = normalize(worldNormal + float3(0.37f, 0.61f, 0.19f));
-
-  // let aoVisible =
-  //     traceVisibilityRay(aoRayOrigin, aoRayDirection, 0.02f,
-  //     aoDistanceMetres);
-  // let ao = aoVisible ? 1.0f : 0.55f;
-
-  let diffuseAlbedo = albedo * (1.0 - metalness);
-  let ambientTerm = 0.0005 * ambientOcclusion;
+  Fragment fragment = Fragment(attributes);
 
   let bayCount = max(registers.lightCount / TUNNEL_LIGHTS_PER_BAY, 1u);
-
-  let previousBay = bayId == 0 ? bayCount - 1 : bayId - 1;
-  let nextBay = bayId + 1 == bayCount ? 0 : bayId + 1;
+  let previousBay = fragment.bayId == 0 ? bayCount - 1 : fragment.bayId - 1;
+  let nextBay = fragment.bayId + 1 == bayCount ? 0 : fragment.bayId + 1;
 
   var directLight = float3(0.0);
-  directLight += sampleTunnelLight(previousBay * TUNNEL_LIGHTS_PER_BAY +
-                                       LED_LIGHT_OFFSET_IN_BAY,
-                                   worldPosition, worldNormal);
-
-  directLight +=
-      sampleTunnelLight(bayId * TUNNEL_LIGHTS_PER_BAY + LED_LIGHT_OFFSET_IN_BAY,
-                        worldPosition, worldNormal);
-
-  directLight += sampleTunnelLight(nextBay * TUNNEL_LIGHTS_PER_BAY +
-                                       LED_LIGHT_OFFSET_IN_BAY,
-                                   worldPosition, worldNormal);
+  directLight += sampleLED(fragment, previousBay);
+  directLight += sampleLED(fragment, fragment.bayId);
+  directLight += sampleLED(fragment, nextBay);
 
   if (receivesLowerStripLighting(geometryKind)) {
-    let stripBase =
-        bayId * TUNNEL_LIGHTS_PER_BAY + LOWER_STRIP_LIGHT_OFFSET_IN_BAY;
-
     for (uint stripLightIndex = 0; stripLightIndex < LOWER_STRIP_LIGHTS_PER_BAY;
          stripLightIndex++) {
-      directLight += sampleTunnelLight(stripBase + stripLightIndex,
-                                       worldPosition, worldNormal);
+      directLight += sampleStripLight(fragment, stripLightIndex);
     }
   }
 
-  float3 finalColour = emissive + albedo * (ambientTerm + directLight);
+  let diffuseAlbedo = fragment.albedo * (1.0 - fragment.metalness);
+  let ambientTerm = 0.0005 * fragment.ambientOcclusion;
+
+  float3 finalColour = diffuseAlbedo * (ambientTerm + directLight);
 
   payload.hitValue = finalColour;
   payload.weight = float3(0.0);
   payload.depth = 100;
 
-  // let bayDebug = frac(float(bayId) * 0.137);
-  // payload.hitValue = float3(bayDebug, 1.0 - bayDebug, 0.25) * directLight;
+  // let bayDebug = frac(fragment.bayId * 0.137);
+  // payload.hitValue = float3(bayDebug, 1.0 - bayDebug, 0.25);
   // payload.weight = float3(0.0);
   // payload.depth = 100;
   return;
+}
+
+float3 sampleLED(Fragment fragment, uint bayID) {
+  return sampleTunnelLight(bayID * TUNNEL_LIGHTS_PER_BAY +
+                               LED_LIGHT_OFFSET_IN_BAY,
+                           fragment.worldPosition, fragment.worldNormal);
+}
+
+float3 sampleStripLight(Fragment fragment, uint stripLightIndex) {
+  let stripBase =
+      fragment.bayId * TUNNEL_LIGHTS_PER_BAY + LOWER_STRIP_LIGHT_OFFSET_IN_BAY;
+  return sampleTunnelLight(stripBase + stripLightIndex, fragment.worldPosition,
+                           fragment.worldNormal);
 }
 
 float3 sampleTunnelLight(uint lightIndex, float3 worldPosition,
@@ -304,3 +211,110 @@ bool traceVisibilityRay(float3 origin, float3 direction, float rayTMin,
 
   return !payload.hit;
 }
+
+struct Fragment {
+  float3 worldPosition;
+  float3 worldNormal;
+  float3 albedo;
+  float metalness;
+  float roughness;
+  float ambientOcclusion;
+  uint bayId;
+
+  __init(BuiltInTriangleIntersectionAttributes attributes) {
+    // Fetch the primitive, based on bayId and geometryKind
+    let geometryKind = GeometryIndex();
+
+    bayId = InstanceID();
+    let primitiveIndex = bayId * BAY_GEOMETRY_KIND_COUNT + geometryKind;
+
+    Primitive primitive = registers.primitiveBuffer[primitiveIndex];
+    Material material = *primitive.material;
+
+    let emissive = material.emissiveColourFactor;
+
+    uint indexOffset = 3 * PrimitiveIndex();
+
+    uint3 triangleIndex = uint3(primitive.indexBuffer[indexOffset],
+                                primitive.indexBuffer[indexOffset + 1],
+                                primitive.indexBuffer[indexOffset + 2]);
+
+    float2 attribs = attributes.barycentrics;
+    float3 barycentrics =
+        float3(1.0 - attribs.x - attribs.y, attribs.x, attribs.y);
+
+    // Extract the vertices
+    Vertex v0 = primitive.vertexBuffer[triangleIndex.x];
+    Vertex v1 = primitive.vertexBuffer[triangleIndex.y];
+    Vertex v2 = primitive.vertexBuffer[triangleIndex.z];
+
+    // Get the UV
+    var uv = v0.uv * barycentrics.x + v1.uv * barycentrics.y +
+             v2.uv * barycentrics.z;
+
+    if (geometryKind == GEOMETRY_KIND_TUNNEL_SHELL) {
+      uv *= 0.1;
+    }
+
+    if (geometryKind == GEOMETRY_KIND_SERVICE_WALKWAY) {
+      uv *= 0.4;
+    }
+
+    if (geometryKind == GEOMETRY_KIND_SLAB_BED) {
+      uv *= 0.1;
+    }
+
+    if (geometryKind == GEOMETRY_KIND_RAILS) {
+      uv *= 0.1;
+    }
+
+    // Position
+    let position = v0.position * barycentrics.x + v1.position * barycentrics.y +
+                   v2.position * barycentrics.z;
+
+    float3x4 objectToWorld = ObjectToWorld3x4();
+    worldPosition = mul(objectToWorld, float4(position, 1.0));
+
+    let worldP0 = mul(objectToWorld, float4(v0.position, 1.0)).xyz;
+    let worldP1 = mul(objectToWorld, float4(v1.position, 1.0)).xyz;
+    let worldP2 = mul(objectToWorld, float4(v2.position, 1.0)).xyz;
+
+    float3 normal = v0.normal * barycentrics.x + v1.normal * barycentrics.y +
+                    v2.normal * barycentrics.z;
+
+    float3x4 worldToObject = WorldToObject3x4();
+    float4 transformedNormal = mul(normal, worldToObject);
+    worldNormal = normalize(transformedNormal.xyz);
+
+    worldNormal = applyNormalMap(material, uv, worldNormal, worldP0, worldP1,
+                                 worldP2, v0.uv, v1.uv, v2.uv);
+
+    var baseAlbedo = material.baseColourFactor.rgb;
+
+    if (material.baseColourTextureID != NO_TEXTURE) {
+      let sampledBaseColour =
+          textures[NonUniformResourceIndex(material.baseColourTextureID)]
+              .SampleLevelZero(uv, 0)
+              .rgb;
+
+      baseAlbedo *= sampledBaseColour;
+    }
+
+    albedo = saturate(baseAlbedo);
+
+    ambientOcclusion = 1.0;
+    roughness = 0.85;
+    metalness = 0.0;
+
+    if (material.metallicRoughnessTextureID != NO_TEXTURE) {
+      let orm =
+          textures[NonUniformResourceIndex(material.metallicRoughnessTextureID)]
+              .SampleLevelZero(uv, 0)
+              .rgb;
+
+      ambientOcclusion = orm.r;
+      roughness = saturate(orm.g);
+      metalness = saturate(orm.b);
+    }
+  }
+};
