@@ -65,59 +65,6 @@ float3 sampleStripLight(Fragment fragment, uint stripLightIndex) {
   return evaluateDirectLighting(fragment, light);
 }
 
-float3 sampleTunnelLight(uint lightIndex, float3 worldPosition,
-                         float3 worldNormal) {
-  if (lightIndex >= registers.lightCount) {
-    return float3(0.0);
-  }
-
-  let light = registers.lightBuffer[lightIndex];
-
-  let lightSamplePosition = closestPointOnLightShape(light, worldPosition);
-  let toLight = lightSamplePosition - worldPosition;
-
-  let distanceMetres = length(toLight);
-  let lightDir = toLight / max(distanceMetres, 0.001);
-
-  let ndotl = saturate(dot(worldNormal, lightDir));
-
-  let distance01 = saturate(distanceMetres / light.radiusMetres);
-  let radiusFade = saturate(1.0 - distance01 * distance01);
-  let distanceAttenuation = radiusFade * radiusFade;
-
-  let fromLightToSurface = -lightDir;
-  let emissionCos =
-      saturate(dot(normalize(light.emissionDirection), fromLightToSurface));
-  let directionalAttenuation = pow(emissionCos, light.directionalFalloffPower);
-
-  let attenuation = distanceAttenuation * directionalAttenuation;
-
-  if (ndotl <= 0.0 || attenuation <= 0.0) {
-    return float3(0.0);
-  }
-
-  RayDesc shadowRay;
-  shadowRay.Origin = worldPosition + worldNormal * 0.01;
-  shadowRay.Direction = lightDir;
-  shadowRay.TMin = 0.001;
-  shadowRay.TMax = max(distanceMetres - 1.0, 0.001);
-
-  ShadowPayload shadowPayload;
-  shadowPayload.hit = true;
-
-  TraceRay(tlas,
-           RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH | RAY_FLAG_FORCE_OPAQUE |
-               RAY_FLAG_SKIP_CLOSEST_HIT_SHADER,
-           0xFF, RAY_TYPE_RADIANCE, HIT_SBT_STRIDE_IGNORE_GEOMETRY,
-           MISS_TYPE_SHADOW, shadowRay, shadowPayload);
-
-  if (shadowPayload.hit) {
-    return float3(0.0);
-  }
-
-  return light.colour * light.intensity * ndotl * attenuation;
-}
-
 bool isEmissiveGeometry(uint geometryKind) {
   return geometryKind == GEOMETRY_KIND_LED_TUBES ||
          geometryKind == GEOMETRY_KIND_LOWER_STRIPS;
@@ -404,8 +351,8 @@ float3 evaluateDirectLighting(Fragment fragment, DirectLightSample light) {
     return float3(0.0);
 
   let n = fragment.worldNormal;
-  let v = normalize(fragment.viewDirection);
-  let l = normalize(light.directionToLight);
+  let v = fragment.viewDirection;
+  let l = light.directionToLight;
   let h = normalize(v + l);
 
   let nDotL = saturate(dot(n, l));
@@ -418,6 +365,7 @@ float3 evaluateDirectLighting(Fragment fragment, DirectLightSample light) {
 
   let roughness = fragment.directRoughness();
   let f = fresnelSchlick(vDotH, fragment.f0());
+
   let d = distributionGGX(nDotH, roughness);
   let g = geometrySchlickGGX(nDotL, roughness) *
           geometrySchlickGGX(nDotV, roughness);

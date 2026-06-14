@@ -1,6 +1,6 @@
 use crate::{mesh_generation, track::Track};
 
-pub const LED_TUBE_LIGHT_RADIUS_METRES: f32 = 6.0;
+pub const LED_TUBE_LIGHT_RADIUS_METRES: f32 = 7.0;
 pub const LED_TUBE_LIGHT_INTENSITY: f32 = 30.0;
 pub const LED_TUBE_DIRECTIONAL_FALLOFF_POWER: f32 = 4.0;
 
